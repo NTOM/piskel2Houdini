@@ -8,6 +8,7 @@
   "hip": "C:/path/to/file.hip",
   "cook_node": "/obj/geo1/OUT",                    # 必须：要执行 cook 的节点
   "parm_node": "/obj/geo1/INPUT",                  # 可选：要设置参数的节点（默认与 cook_node 相同）
+  "uuid": "123e4567-e89b-12d3-a456-426614174000",  # 可选
   "parms": { "seed": 3, "json_data": "{ ... }" },
   "hython": "C:/Program Files/Side Effects Software/Houdini 19.5.716/bin/hython.exe",  # 可选
   "hfs": "C:/Program Files/Side Effects Software/Houdini 19.5.716",                   # 可选(提供了hython则可不传)
@@ -63,6 +64,61 @@ def _worker_script_path() -> str:
 	"""
 	return os.path.join(os.path.dirname(__file__), "hython_cook_worker.py")
 
+def _normalize_parms(parms: dict) -> dict:
+	"""确保参数字典中的所有键都转换为小写
+	
+	Args:
+		parms (dict): 原始参数字典
+		
+	Returns:
+		dict: 键转换为小写的参数字典
+	"""
+	if not parms:
+		return {}
+	return {k.lower(): v for k, v in parms.items()}
+
+def _extract_uuid(payload: Dict[str, Any], parms_lower: Dict[str, Any]) -> str:
+	"""从请求中提取 UUID。
+
+	优先使用顶层 payload['uuid']；否则尝试从 parms['room_file'] 提取（形如 "<uuid>.json"）。
+	若均不可得，返回空字符串。
+	"""
+	uuid_val = str(payload.get("uuid") or "").strip()
+	if uuid_val:
+		return uuid_val
+	room_file = str(parms_lower.get("room_file") or "").strip()
+	if room_file:
+		base = os.path.basename(room_file)
+		uuid_guess, _ = os.path.splitext(base)
+		return uuid_guess
+	return ""
+
+def _log_path_for_hip(hip_path: str, uuid_val: str) -> Optional[str]:
+	"""根据 hip 文件路径与 uuid 计算日志文件路径：<hip_dir>/export/serve/log/<uuid>.json。
+
+	当 hip_dir 不存在或 uuid 为空时返回 None。
+	"""
+	try:
+		hip_dir = os.path.dirname(hip_path or "")
+		if not hip_dir or not os.path.isdir(hip_dir) or not uuid_val:
+			return None
+		log_dir = os.path.join(hip_dir, "export", "serve", "log")
+		os.makedirs(log_dir, exist_ok=True)
+		return os.path.join(log_dir, f"{uuid_val}.json")
+	except Exception:
+		return None
+
+def _write_json_safely(path: Optional[str], data: Dict[str, Any]) -> None:
+	"""将 data 写入到 path（UTF-8）。若 path 无效或写入失败则忽略错误。"""
+	if not path:
+		return
+	try:
+		with open(path, "w", encoding="utf-8") as f:
+			json.dump(data, f, ensure_ascii=False, indent=2)
+			f.flush()
+	except Exception:
+		pass
+
 @app.route("/ping", methods=["GET"])
 def ping():
 	"""健康检查接口。"""
@@ -107,7 +163,7 @@ def cook():
 			return jsonify({"ok": False, "error": f"找不到工作脚本: {worker}"}), 500
 
 		# 生成临时 job.json，作为子进程输入
-		job = {"hip": hip, "cook_node": cook_node, "parm_node": parm_node, "parms": parms}
+		job = {"hip": hip, "cook_node": cook_node, "parm_node": parm_node, "parms": _normalize_parms(parms)}
 		timeout_sec = int(payload.get("timeout_sec", 600)) # 读取请求体中的 timeout_sec 字段，如果 timeout_sec 不存在，则返回 600
 
 		# 创建上下文管理器
@@ -168,6 +224,26 @@ def cook():
 				except Exception:
 					pass
 
+
+		# 记录日志：收集调度与子进程的关键信息，写入到 hip/export/serve/log/<uuid>.json
+		uuid_val = _extract_uuid(payload, _normalize_parms(parms))
+		log_obj = {
+			"uuid": uuid_val,
+			"ok": bool(worker_json and worker_json.get("ok") and proc.returncode == 0),
+			"elapsed_ms_dispatch": elapsed_ms,
+			"returncode": proc.returncode,
+			"stdout": stdout,
+			"stderr": stderr,
+			"worker_json": worker_json,
+			"request": {
+				"hip": hip,
+				"cook_node": cook_node,
+				"parm_node": parm_node,
+				"parms": _normalize_parms(parms)
+			}
+		}
+		_write_json_safely(_log_path_for_hip(hip, uuid_val), log_obj)
+
 		# 返回成功：透传 worker 的结果并补充调度耗时
 		if proc.returncode == 0 and worker_json and worker_json.get("ok"):
 			worker_json["elapsed_ms_dispatch"] = elapsed_ms
@@ -186,8 +262,47 @@ def cook():
 			return jsonify(resp), 500
 
 	except subprocess.TimeoutExpired:
+		# 记录超时日志
+		try:
+			parms_lower = _normalize_parms((payload or {}).get("parms", {}))
+			uuid_val = _extract_uuid(payload or {}, parms_lower)
+			log_obj = {
+				"uuid": uuid_val,
+				"ok": False,
+				"error": "hython 执行超时",
+				"worker_json": None,
+				"request": {
+					"hip": (payload or {}).get("hip"),
+					"cook_node": (payload or {}).get("cook_node"),
+					"parm_node": (payload or {}).get("parm_node"),
+					"parms": parms_lower
+				}
+			}
+			_write_json_safely(_log_path_for_hip((payload or {}).get("hip"), uuid_val), log_obj)
+		except Exception:
+			pass
 		return jsonify({"ok": False, "error": "hython 执行超时"}), 504
 	except Exception as e:
+		# 记录异常日志
+		try:
+			parms_lower = _normalize_parms((payload or {}).get("parms", {}))
+			uuid_val = _extract_uuid(payload or {}, parms_lower)
+			log_obj = {
+				"uuid": uuid_val,
+				"ok": False,
+				"error": str(e),
+				"traceback": traceback.format_exc(),
+				"worker_json": None,
+				"request": {
+					"hip": (payload or {}).get("hip"),
+					"cook_node": (payload or {}).get("cook_node"),
+					"parm_node": (payload or {}).get("parm_node"),
+					"parms": parms_lower
+				}
+			}
+			_write_json_safely(_log_path_for_hip((payload or {}).get("hip"), uuid_val), log_obj)
+		except Exception:
+			pass
 		return jsonify({"ok": False, "error": str(e), "traceback": traceback.format_exc()}), 500
 
 def _parse_args() -> argparse.Namespace:

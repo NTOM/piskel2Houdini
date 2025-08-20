@@ -41,7 +41,11 @@ Piskel2Houdini 是一个基于 [Piskel](https://github.com/piskelapp/piskel) 开
 
 *   **功能**：提供直观的地牢图编辑界面
 *   **数据格式**：支持二值图片（黑白像素）和二维数组（0/1矩阵）
-*   **交互**：添加控制按钮，支持地图编辑和导出
+*   **交互**：
+    - 新增 Preferences → `PCG` 选项卡
+    - 参数输入：`Area layout seed`（默认 9624，可清空再输入）
+    - 按钮：`Step1_RoomGen`，点击后构造请求并发送到本地调度服务
+*   **请求模板（前端内置）**：顶层包含 `uuid`，并在 `parms.room_file` 复用 `{uuid}.json`
 *   **技术栈**：JavaScript + HTML + CSS
 
 ### 2. 数据格式
@@ -80,15 +84,20 @@ Piskel2Houdini 是一个基于 [Piskel](https://github.com/piskelapp/piskel) 开
 ```json
 {
   "hip": "C:/path/to/file.hip",
-  "cook_node": "/obj/geo1/OUT",                    # 必须：要执行 cook 的节点
-  "parm_node": "/obj/geo1/INPUT",                  # 可选：要设置参数的节点（默认与 cook_node 相同）
-  "parms": { "seed": 3, "json_data": "{...}" },
+  "cook_node": "/obj/geo1/OUT",                    
+  "parm_node": "/obj/geo1/INPUT",                  
+  "uuid": "0c8b1b54-2b3a-4a4e-8a6f-0c4d7b1a2f33",  
+  "parms": { "area_layout_seed": 9624, "room_file": "0c8b1b54-2b3a-4a4e-8a6f-0c4d7b1a2f33.json" },
   "hython": "C:/Program Files/Side Effects Software/Houdini 19.5.716/bin/hython.exe",
   "hfs": "C:/Program Files/Side Effects Software/Houdini 19.5.716",
   "timeout_sec": 600
 }
 ```
-  - 说明：优先使用 `hython` 字段；若未提供则尝试从 `hfs` 推断；都未提供则报错。`parms` 为节点参数字典（标量或 tuple/数组）。`cook_node` 是必须的，`parm_node` 是可选的，如果未提供则默认与 `cook_node` 相同。
+  - 说明：
+    - 优先使用 `hython` 字段；若未提供则尝试从 `hfs` 推断；都未提供则报错。
+    - `parms` 为节点参数字典（标量或 tuple/数组）。`cook_node` 是必须的，`parm_node` 是可选的，如果未提供则默认与 `cook_node` 相同。
+    - 服务端会将 `parms` 的键名统一规范化为小写，避免大小写不一致问题。
+    - 前端需在请求顶层提供 `uuid`，并在需要时在 `parms` 中复用（如 `room_file` 使用 `{uuid}.json`）。
   - 成功响应（示例）：
 ```json
 {
@@ -98,6 +107,7 @@ Piskel2Houdini 是一个基于 [Piskel](https://github.com/piskelapp/piskel) 开
   "elapsed_ms": 245,
   "node_errors": [],
   "missing_parms": [],
+  "parms": {"area_layout_seed": 9624, "room_file": "0c8b1b54-2b3a-4a4e-8a6f-0c4d7b1a2f33.json"},
   "elapsed_ms_dispatch": 312
 }
 ```
@@ -112,6 +122,13 @@ Piskel2Houdini 是一个基于 [Piskel](https://github.com/piskelapp/piskel) 开
   "stderr": "..."
 }
 ```
+
+##### 日志与跨域（CORS）
+- 日志：每次 `POST /cook` 调用，调度服务都会将执行详情写入日志文件：
+  - 位置：`<hip所在目录>/export/serve/log/{uuid}.json`
+  - 内容：`uuid`、`ok`、`elapsed_ms_dispatch`、`returncode`、`stdout`、`stderr`、`worker_json`、`request`（含小写化后的 `parms`）
+  - 成功/失败/超时/异常均会尽力写入日志
+- 跨域：调度服务已开启基础 CORS 支持，允许从 `http://localhost:9901` 等本地页面访问。
 
 ##### 约定
 - **hython 解析**：
@@ -201,7 +218,21 @@ Invoke-RestMethod -Uri "http://127.0.0.1:5050/cook" `
 ```
 
 #### 2.4 Piskel通信测试
-*   调整通信接口：` PcgPreferencesController.js`文件中的url，例如：`http://127.0.0.1:5050/cook `
+*   打开 `grunt play` 页面：`http://localhost:9901/?debug`
+*   在 Preferences → `PCG` 中设置 `Area layout seed`，点击 `Step1_RoomGen`
+*   请求示例（由前端自动生成并发送）：
+```json
+{
+  "hip": "I:/Ugit_Proj/moco_pcg/dev_oa_ui.hip",
+  "cook_node": "/obj/UI_part_01/cook_001",
+  "parm_node": "/obj/UI_part_01/SETTING",
+  "uuid": "<前端生成的uuid>",
+  "parms": { "area_layout_seed": 9624, "room_file": "<前端生成的uuid>.json" },
+  "hython": "C:/Program Files/Side Effects Software/Houdini 20.5.487/bin/hython.exe",
+  "timeout_sec": 300
+}
+```
+*   观察调度服务控制台与日志文件 `<hip>/export/serve/log/{uuid}.json`
 
 
 ### 3.使用方法
@@ -214,20 +245,22 @@ Invoke-RestMethod -Uri "http://127.0.0.1:5050/cook" `
 
 *   [x] 基础画板功能
 *   [x] demo_test.hip测试工程
-*   [x] Python后端服务开发：后端参数接受与hip调用执行
-*   [ ] 画板的参数发送功能
+*   [x] Python后端服务开发：监视功能与hip执行功能
+*   [x] 画板的参数发送功能（PCG/Step1_RoomGen，顶层 uuid + parms）
+*   [ ] 后端数据处理功能：一个脚本，可以将json文件转jpg图片，也可以将jpg图片转json。
+*   [ ] 后端监视脚本，在处理功能结束后，将得到的uuid.jpg发送回前端
+*   [ ] 前端图片自动加载
 
-### 第二阶段
+### 第二阶段-前端界面功能
 
-*   [ ] 数据格式标准化
-*   [ ] 错误处理和日志系统
+*   [x] 数据格式标准化
+*   [x] 错误处理和日志系统
 *   [ ] 用户界面优化
 
 ### 第三阶段
 
-*   [ ] 高级地牢生成算法
-*   [ ] 批量处理功能
-*   [ ] 性能优化
+*   [x] 地牢布局生成算法
+*   [ ] 任务池功能
 
 ## 贡献指南
 

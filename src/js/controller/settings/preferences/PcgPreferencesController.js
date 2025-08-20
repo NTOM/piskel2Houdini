@@ -68,15 +68,19 @@
     var template = pskl.utils.Template.get('pcg-step1-request-template');
     if (!template) { return; }
 
-    // 2) 收集参数：从用户设置读取 AREA_LAYOUT_SEED
+    // 2) 生成UUID
+    var uuid = this.generateUUID_();
+
+    // 3) 收集参数：从用户设置读取 area_layout_seed
     var seed = pskl.UserSettings.get(pskl.UserSettings.AREA_LAYOUT_SEED) || 9624;
 
-    // 3) 替换模板中的占位符
+    // 4) 替换模板中的占位符
     var requestJsonString = pskl.utils.Template.replace(template, {
-      'AREA_LAYOUT_SEED': seed
+      'area_layout_seed': seed,
+      'uuid': uuid
     });
 
-    // 4) 发送到本地调度服务（默认 5050 端口）
+    // 5) 发送到本地调度服务（默认 5050 端口）
     try {
       var payload = JSON.parse(requestJsonString);
       var url = 'http://127.0.0.1:5050/cook';
@@ -89,6 +93,19 @@
     } catch (e) {
       console.error('[PCG] Step1_RoomGen invalid template JSON:', e);
     }
+  };
+
+  /**
+   * 生成UUID v4
+   * @private
+   * @returns {string} UUID字符串
+   */
+  ns.PcgPreferencesController.prototype.generateUUID_ = function () {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+      var r = Math.random() * 16 | 0;
+      var v = c == 'x' ? r : (r & 0x3 | 0x8);
+      return v.toString(16);
+    });
   };
 
   ns.PcgPreferencesController.prototype.destroy = function () {

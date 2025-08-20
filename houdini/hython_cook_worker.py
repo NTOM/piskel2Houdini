@@ -127,7 +127,8 @@ def main():
 			"parm_node": parm_node.path(),
 			"elapsed_ms": elapsed_ms,
 			"node_errors": cook_node.errors(),
-			"missing_parms": missing
+			"missing_parms": missing,
+			"parms": parms
 		}
 		print(json.dumps(result, ensure_ascii=False))
 		_write_result(args.out, result)
