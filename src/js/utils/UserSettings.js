@@ -2,6 +2,7 @@
   var ns = $.namespace('pskl');
 
   ns.UserSettings = {
+    AREA_LAYOUT_SEED : 'AREA_LAYOUT_SEED',
     GRID_COLOR : 'GRID_COLOR',
     GRID_ENABLED : 'GRID_ENABLED',
     GRID_WIDTH : 'GRID_WIDTH',
@@ -29,6 +30,7 @@
       'GRID_ENABLED' : false,
       'GRID_WIDTH' : 1,
       'GRID_SPACING' : 1,
+      'AREA_LAYOUT_SEED' : 9624,
       'MAX_FPS' : 24,
       'DEFAULT_SIZE' : {
         width : Constants.DEFAULT.WIDTH,

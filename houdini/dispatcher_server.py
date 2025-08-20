@@ -28,6 +28,19 @@ from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
+# 简单的 CORS 处理，允许从本地前端访问（如 http://localhost:9901）
+@app.after_request
+def add_cors_headers(response):
+	response.headers['Access-Control-Allow-Origin'] = '*'
+	response.headers['Access-Control-Allow-Methods'] = 'GET,POST,OPTIONS'
+	response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+	return response
+
+@app.route('/cook', methods=['OPTIONS'])
+def cook_preflight():
+	# 预检请求直接返回
+	return ('', 204)
+
 def _resolve_hython_path(payload: Dict[str, Any]) -> str:
 	"""
 	解析 hython 可执行文件路径。

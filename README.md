@@ -153,7 +153,7 @@ Piskel2Houdini 是一个基于 [Piskel](https://github.com/piskelapp/piskel) 开
 *   Houdini 软件（支持 hython）
 *   现代浏览器（Chrome、Firefox、Edge）
 
-### 2.开发版本步骤
+### 2.测试步骤
 
 #### 2.1 安装并配置piskel
 
@@ -162,7 +162,7 @@ Piskel2Houdini 是一个基于 [Piskel](https://github.com/piskelapp/piskel) 开
 *   run npm install
 *   install CasperJS (needed for integration tests)
 
-#### 2.2 运行测试版本
+#### 2.2 测试piske本地运行
 *   `grunt`：grunt会将piskel构建到仓库根目录下的/dest文件夹中。
 *   `grunt serve`：
     *   build the application构建应用程序
@@ -178,7 +178,7 @@ Piskel2Houdini 是一个基于 [Piskel](https://github.com/piskelapp/piskel) 开
     *   execute unit tests 执行单元测试
     *   execute integration tests 执行集成测试
 
-#### 2.3 Houdini服务端启动测试
+#### 2.3 Houdini服务端本地测试
 *   启动监听服务：`python houdini\dispatcher_server.py --host 0.0.0.0 --port 5050 `
 *   powershell进行ping通测试：`curl http://127.0.0.1:5050/ping `
 *   powershell发送伪请求，测试Houdini执行结果，例如：
@@ -200,6 +200,10 @@ Invoke-RestMethod -Uri "http://127.0.0.1:5050/cook" `
     -ContentType "application/json"
 ```
 
+#### 2.4 Piskel通信测试
+*   调整通信接口：` PcgPreferencesController.js`文件中的url，例如：`http://127.0.0.1:5050/cook `
+
+
 ### 3.使用方法
 
 *   [ ] 待补充
@@ -209,8 +213,8 @@ Invoke-RestMethod -Uri "http://127.0.0.1:5050/cook" `
 ### 第一阶段-数值通信
 
 *   [x] 基础画板功能
-*   [ ] demo_test.hip测试工程
-*   [ ] Python后端服务开发：后端参数接受与hip调用执行
+*   [x] demo_test.hip测试工程
+*   [x] Python后端服务开发：后端参数接受与hip调用执行
 *   [ ] 画板的参数发送功能
 
 ### 第二阶段

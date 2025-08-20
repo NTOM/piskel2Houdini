@@ -13,6 +13,10 @@
     'tile' : {
       template : 'templates/settings/preferences/tile.html',
       controller : ns.preferences.TilePreferencesController
+    },
+    'pcg' : {
+      template : 'templates/settings/preferences/pcg.html',
+      controller : ns.preferences.PcgPreferencesController
     }
   };
 

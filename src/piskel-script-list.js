@@ -131,6 +131,7 @@
   "js/controller/settings/preferences/GridPreferencesController.js",
   "js/controller/settings/preferences/MiscPreferencesController.js",
   "js/controller/settings/preferences/TilePreferencesController.js",
+  "js/controller/settings/preferences/PcgPreferencesController.js",
   "js/controller/settings/PreferencesController.js",
   "js/controller/settings/exportimage/GifExportController.js",
   "js/controller/settings/exportimage/PngExportController.js",
