@@ -21,18 +21,18 @@ Piskel2Houdini 是一个基于 [Piskel](https://github.com/piskelapp/piskel) 开
 ### 1.系统组成
 
 1.  **前端画板**：基于 Piskel 的浏览器端画板工具
-2.  **本地后端**：Python 服务脚本
+2.  **本地后端**：基于插件化任务处理器的 Python 服务
 3.  **Houdini 引擎**：HDA 文件和 hython 脚本
 4.  **数据通信**：HTTP 接口和文件交换
 
 ### 2.核心流程
 
-    用户编辑 → 数据导出 → Python处理 → Houdini生成 → 结果返回 → 画板刷新
+    用户编辑 → 数据导出 → 任务类型识别 → 对应处理器执行 → 结果返回 → 画板刷新
 
 **详细流程**：
-1. 前端发送请求：指定 `hip`、`cook_node`（执行节点）、`parm_node`（参数节点，可选）
-2. 调度服务启动 hython 子进程
-3. 工作脚本加载 HIP，向 `parm_node` 设置参数，对 `cook_node` 执行 cook
+1. 前端发送请求：指定 `task_type`、`hip`、相关节点和参数
+2. 调度服务根据 `task_type` 选择对应的任务处理器
+3. 任务处理器执行自己的流程（如 hython + JSON转PNG、纹理导出、光照烘焙等）
 4. 返回执行结果和状态信息
 
 ## 四、技术方案详解
@@ -45,7 +45,8 @@ Piskel2Houdini 是一个基于 [Piskel](https://github.com/piskelapp/piskel) 开
     - 新增 Preferences → `PCG` 选项卡
     - 参数输入：`Area layout seed`（默认 9624，可清空再输入）
     - 按钮：`Step1_RoomGen`，点击后构造请求并发送到本地调度服务
-*   **请求模板（前端内置）**：顶层包含 `uuid`，并在 `parms.room_file` 复用 `{uuid}.json`
+*   **请求模板（前端内置）**：顶层包含 `task_type`、`uuid`，并在 `parms.room_file` 复用 `{uuid}.json`
+*   **完整工作流**：一次请求完成 Houdini 生成 → JSON 导出 → PNG 图片转换
 *   **技术栈**：JavaScript + HTML + CSS
 
 ### 2. 数据格式
@@ -54,6 +55,10 @@ Piskel2Houdini 是一个基于 [Piskel](https://github.com/piskelapp/piskel) 开
     *   黑色像素：非活动区
     *   红色像素：活动区域
     *   其他颜色：桥梁或者临时替代之用
+*   **像素数据格式**：
+    *   `pixels`：RGB 颜色数组，分量范围 [0,1] 浮点数
+    *   `total_prims`：总像素数量（用于推断正方形画布尺寸）
+    *   像素索引：从左下角开始，先 X 递增（左→右），再 Y 递增（下→上）
 
 ### 3. 通信机制
 
@@ -61,43 +66,53 @@ Piskel2Houdini 是一个基于 [Piskel](https://github.com/piskelapp/piskel) 开
 *   **传输协议**：本地HTTP请求
 *   **数据格式**：JSON + 二进制图片数据
 
-#### 3.1 调度-工作者（Dispatcher-Worker）方案
+#### 3.1 插件化任务处理器架构
 
-- **核心思想**：常驻的调度 HTTP 服务只负责接收请求与调度执行；真正的 Houdini 执行由每次请求启动的 hython 子进程完成，做到“请求即执行，进程即释放”。
+- **核心思想**：调度服务通过 `task_type` 字段识别任务类型，调用对应的处理器执行具体流程。每种任务类型有自己的执行逻辑，便于扩展和维护。
 - **优点**：
-  - **隔离性强**：每次执行独立进程，互不影响，避免状态污染
-  - **部署简单**：调度服务只依赖系统 Python + Flask；Houdini 相关依赖在 hython 进程内
-  - **灵活传参**：请求时动态指定 hip、node 和参数
+  - **可扩展性**：新增功能只需实现新的处理器类
+  - **职责分离**：每种任务类型独立维护
+  - **配置灵活**：不同任务类型可以有不同的必需字段和参数
+  - **向后兼容**：现有功能包装为默认处理器
 
-##### 流程
-1. 前端/调用方向调度服务发送 `POST /cook`
-2. 调度服务读取请求体：`hip`、`cook_node`（必须）、`parm_node`（可选，默认与 cook_node 相同）、`parms`（键值对）、可选 `hython` 或 `hfs`
-3. 调度服务生成临时 `job.json`，启动 hython 子进程执行工作脚本 `hython_cook_worker.py`
-4. 工作脚本在 hython 内：加载 HIP → 获取 cook_node 和 parm_node → 向 parm_node 设置参数 → 对 cook_node 执行 `cook(force=True)` → 输出规范化 JSON 到 stdout
-5. 调度服务收集 stdout/stderr/exit code，合并耗时信息并返回给调用方
+- **目前支持的任务类型**
+    - **room_generation**（默认）：房间生成，执行 hython + JSON转PNG 流程
 
-##### 接口
+#### 3.2 流程
+1. 前端/调用方向调度服务发送 `POST /cook`，指定 `task_type`
+2. 调度服务根据 `task_type` 查找对应的任务处理器
+3. 处理器验证必需字段，执行自己的流程
+4. 返回执行结果
+
+#### 3.3 接口
 - **健康检查**：`GET /ping`
   - 返回：`{"status":"ok"}`
-- **执行 cook**：`POST /cook`
+- **任务类型列表**：`GET /tasks`
+  - 返回：`{"supported_tasks": [...], "default_task": "..."}`
+- **执行任务**：`POST /cook`
   - 请求体（JSON）：
 ```json
 {
+  "task_type": "room_generation",                    # 可选，默认 "room_generation"
   "hip": "C:/path/to/file.hip",
-  "cook_node": "/obj/geo1/OUT",                    
-  "parm_node": "/obj/geo1/INPUT",                  
-  "uuid": "0c8b1b54-2b3a-4a4e-8a6f-0c4d7b1a2f33",  
+  "cook_node": "/obj/geo1/OUT",                     # 根据任务类型可能需要不同字段
+  "parm_node": "/obj/geo1/INPUT",                   # 可选
+  "uuid": "0c8b1b54-2b3a-4a4e-8a6f-0c4d7b1a2f33",  # 必须
   "parms": { "area_layout_seed": 9624, "room_file": "0c8b1b54-2b3a-4a4e-8a6f-0c4d7b1a2f33.json" },
   "hython": "C:/Program Files/Side Effects Software/Houdini 19.5.716/bin/hython.exe",
   "hfs": "C:/Program Files/Side Effects Software/Houdini 19.5.716",
-  "timeout_sec": 600
+  "timeout_sec": 600,                                                               # 可选
+  "post_timeout_sec": 10,                                                           # 可选，后置处理超时
+  "post_wait_sec": 5                                                                # 可选，后置处理等待时间
 }
 ```
   - 说明：
+    - `task_type`：指定任务类型，决定使用哪个处理器
     - 优先使用 `hython` 字段；若未提供则尝试从 `hfs` 推断；都未提供则报错。
-    - `parms` 为节点参数字典（标量或 tuple/数组）。`cook_node` 是必须的，`parm_node` 是可选的，如果未提供则默认与 `cook_node` 相同。
+    - `parms` 为节点参数字典（标量或 tuple/数组）。不同任务类型的必需字段不同。
     - 服务端会将 `parms` 的键名统一规范化为小写，避免大小写不一致问题。
     - 前端需在请求顶层提供 `uuid`，并在需要时在 `parms` 中复用（如 `room_file` 使用 `{uuid}.json`）。
+    - 新增可选参数：`post_timeout_sec`（默认 10s，json2jpg 超时）、`post_wait_sec`（默认 min(5, post_timeout_sec)，等待文件出现时间）
   - 成功响应（示例）：
 ```json
 {
@@ -108,7 +123,24 @@ Piskel2Houdini 是一个基于 [Piskel](https://github.com/piskelapp/piskel) 开
   "node_errors": [],
   "missing_parms": [],
   "parms": {"area_layout_seed": 9624, "room_file": "0c8b1b54-2b3a-4a4e-8a6f-0c4d7b1a2f33.json"},
-  "elapsed_ms_dispatch": 312
+  "elapsed_ms_dispatch": 312,
+  "post": {
+    "ok": true,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": "",
+    "json": {
+      "ok": true,
+      "uuid": "0c8b1b54-2b3a-4a4e-8a6f-0c4d7b1a2f33",
+      "path_json": "I:/Ugit_Proj/moco_pcg/export/serve/0c8b1b54-2b3a-4a4e-8a6f-0c4d7b1a2f33.json",
+      "path_png": "I:/Ugit_Proj/moco_pcg/export/serve/0c8b1b54-2b3a-4a4e-8a6f-0c4d7b1a2f33.png",
+      "exists": true,
+      "width": 64,
+      "height": 64,
+      "pixels_written": 4096
+    },
+    "elapsed_ms_post": 120
+  }
 }
 ```
   - 失败响应（示例）：
@@ -123,14 +155,14 @@ Piskel2Houdini 是一个基于 [Piskel](https://github.com/piskelapp/piskel) 开
 }
 ```
 
-##### 日志与跨域（CORS）
+#### 3.4 日志与跨域（CORS）
 - 日志：每次 `POST /cook` 调用，调度服务都会将执行详情写入日志文件：
   - 位置：`<hip所在目录>/export/serve/log/{uuid}.json`
-  - 内容：`uuid`、`ok`、`elapsed_ms_dispatch`、`returncode`、`stdout`、`stderr`、`worker_json`、`request`（含小写化后的 `parms`）
+  - 内容：`uuid`、`ok`、`elapsed_ms_dispatch`、`returncode`、`stdout`、`stderr`、`worker_json`、`post`（含 json2jpg 结果）、`request`（含小写化后的 `parms`）
   - 成功/失败/超时/异常均会尽力写入日志
 - 跨域：调度服务已开启基础 CORS 支持，允许从 `http://localhost:9901` 等本地页面访问。
 
-##### 约定
+#### 3.5 约定
 - **hython 解析**：
   - 有 `hython` → 直接使用
   - 无 `hython` 且有 `hfs`/环境变量 `HFS` → 组合 `${HFS}/bin/hython.exe`
@@ -143,21 +175,21 @@ Piskel2Houdini 是一个基于 [Piskel](https://github.com/piskelapp/piskel) 开
 
 *   **功能**：接收前端请求、解析数据、调用Houdini
 *   **核心组件**：
-    *   **HTTP 调度服务**（Dispatcher）：常驻 Flask 服务，接收 `hip/cook_node/parm_node/parms` 并启动 hython 子进程
-    *   **hython 工作脚本**（Worker）：在 hython 内加载 HIP、向 parm_node 设置参数、对 cook_node 执行 `cook`
-    *   图像处理模块
-    *   Houdini调用接口
+    *   HTTP 调度服务（Dispatcher）：基于插件化架构的 Flask 服务，根据 `task_type` 路由到对应处理器
+    *   任务处理器基类（BaseTaskProcessor）：定义处理器接口，支持必需字段验证
+    *   图像处理模块（基于 Pillow 库）
+    *   执行Houdini任务模块
     *   结果返回处理
 
 ### 5. Houdini处理
 
-*   **输入**：解析后的地牢图片/矩阵
+*   **输入**：解析后的地牢json文件
 *   **处理**：基于HDA文件进行地图生成和优化
-*   **输出**：新的地牢数据（图片或矩阵格式）
+*   **输出**：新的地牢数据（JSON 格式 + PNG 图片）
 
 ### 6. 结果返回
 
-*   **数据流**：Python脚本将Houdini生成的结果返回给前端
+*   **数据流**：Python脚本将Houdini生成的结果 + PNG图片转换结果返回给前端
 *   **画板更新**：自动刷新显示新生成的地牢图
 *   **迭代支持**：用户可继续编辑或触发下一轮生成
 
@@ -167,6 +199,7 @@ Piskel2Houdini 是一个基于 [Piskel](https://github.com/piskelapp/piskel) 开
 
 *   Node.js 和 npm
 *   Python 3.7+
+*   Pillow 图像处理库：`pip install pillow`
 *   Houdini 软件（支持 hython）
 *   现代浏览器（Chrome、Firefox、Edge）
 
@@ -198,9 +231,11 @@ Piskel2Houdini 是一个基于 [Piskel](https://github.com/piskelapp/piskel) 开
 #### 2.3 Houdini服务端本地测试
 *   启动监听服务：`python houdini\dispatcher_server.py --host 0.0.0.0 --port 5050 `
 *   powershell进行ping通测试：`curl http://127.0.0.1:5050/ping `
+*   查看支持的任务类型：`curl http://127.0.0.1:5050/tasks `
 *   powershell发送伪请求，测试Houdini执行结果，例如：
 ```powershell
 $body = @{
+    task_type = "room_generation"
     hip = "I:\Ugit_Proj\moco_pcg\dev_oa_ui.hip"
     cook_node = "/obj/UI_part_01/cook_001"
     parm_node = "/obj/UI_part_01/SETTING"
@@ -223,6 +258,7 @@ Invoke-RestMethod -Uri "http://127.0.0.1:5050/cook" `
 *   请求示例（由前端自动生成并发送）：
 ```json
 {
+  "task_type": "room_generation",
   "hip": "I:/Ugit_Proj/moco_pcg/dev_oa_ui.hip",
   "cook_node": "/obj/UI_part_01/cook_001",
   "parm_node": "/obj/UI_part_01/SETTING",
@@ -233,23 +269,32 @@ Invoke-RestMethod -Uri "http://127.0.0.1:5050/cook" `
 }
 ```
 *   观察调度服务控制台与日志文件 `<hip>/export/serve/log/{uuid}.json`
+*   检查生成的文件：
+  - `<hip>/export/serve/{uuid}.json`：Houdini 导出的像素数据
+  - `<hip>/export/serve/{uuid}.png`：转换后的 PNG 图片
 
 
 ### 3.使用方法
 
-*   [ ] 待补充
+#### 3.1 服务部署
+*   在`PcgPreferencesController.js`中修改监听服务的url
+
+#### 3.2 新增其他前端任务
+*   设定前端，按照模板发送请求，含有相关任务信息
+*   实现新的处理器类，在 TASK_PROCESSORS 中注册
 
 ## 开发计划
 
 ### 第一阶段-数值通信
 
-*   [x] 基础画板功能
-*   [x] demo_test.hip测试工程
-*   [x] Python后端服务开发：监视功能与hip执行功能
-*   [x] 画板的参数发送功能（PCG/Step1_RoomGen，顶层 uuid + parms）
-*   [ ] 后端数据处理功能：一个脚本，可以将json文件转jpg图片，也可以将jpg图片转json。
-*   [ ] 后端监视脚本，在处理功能结束后，将得到的uuid.jpg发送回前端
-*   [ ] 前端图片自动加载
+*   [x] 前端基础画板功能
+*   [x] 前端请求发送功能：测试发送参数功能-（PCG/Step1_RoomGen，顶层 uuid + parms）
+*   [x] 后端服务部分：请求监听dispatcher服务与执行调度cook_worker服务
+*   [x] 后端逻辑部分：适用于交互流程的拆解的布局生成的PCG逻辑工程
+*   [x] 数据传递格式标准统一 
+*   [x] 后端数据处理：实现json与png的自动转换
+*   [x] 插件化任务处理器架构重构
+*   [ ] 前端接受数据自动加载
 
 ### 第二阶段-前端界面功能
 
@@ -261,6 +306,46 @@ Invoke-RestMethod -Uri "http://127.0.0.1:5050/cook" `
 
 *   [x] 地牢布局生成算法
 *   [ ] 任务池功能
+
+### 新增功能说明
+
+#### 插件化任务处理器架构
+- **设计理念**：每种任务类型对应一个处理器类，处理器负责自己的执行流程
+- **核心组件**：
+  - `BaseTaskProcessor`：抽象基类，定义处理器接口
+  - `RoomGenerationProcessor`：房间生成处理器（hython + JSON转PNG）
+  - `TextureExportProcessor`：纹理导出处理器（待实现）
+  - `LightingBakeProcessor`：光照烘焙处理器（待实现）
+- **优势**：
+  - 可扩展性：新增功能只需实现新的处理器类
+  - 职责分离：每种任务类型独立维护
+  - 配置灵活：不同任务类型可以有不同的必需字段和参数
+  - 向后兼容：现有功能包装为默认处理器
+
+#### JSON → PNG 转换
+- **脚本**：`houdini/json2jpg.py`（名称保留，实际输出 PNG）
+- **功能**：读取生成的 `<hip_dir>/export/serve/{uuid}.json`，转换为 `<hip_dir>/export/serve/{uuid}.png`
+- **像素处理**：
+  - 支持 `pixels` 为列表或映射对象格式
+  - RGB 分量范围 [0,1] → [0,255]
+  - 像素索引：左下角原点，先 X 后 Y 递增
+  - 画布尺寸：根据 `total_prims` 推断正方形（要求完全平方数）
+- **输出格式**：PNG（无损，像素完美保真）
+- **集成方式**：由 `RoomGenerationProcessor` 在 hython 成功后同步执行
+
+#### 响应结构更新
+- 新增 `post` 字段，包含 json2jpg 执行结果
+- `post.json` 包含：`path_json`、`path_png`、`width`、`height`、`pixels_written` 等
+- 支持 `post_timeout_sec` 和 `post_wait_sec` 参数控制后置处理超时和等待时间
+
+#### 文件输出
+- **JSON 数据**：`<hip>/export/serve/{uuid}.json`
+- **PNG 图片**：`<hip>/export/serve/{uuid}.png`
+- **日志记录**：`<hip>/export/serve/log/{uuid}.json`
+
+#### 新增API接口
+- **`GET /tasks`**：列出支持的任务类型和默认任务类型
+- **向后兼容**：不指定 `task_type` 时默认使用 `room_generation`
 
 ## 贡献指南
 
