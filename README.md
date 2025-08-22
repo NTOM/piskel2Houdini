@@ -155,12 +155,16 @@ Piskel2Houdini 是一个基于 [Piskel](https://github.com/piskelapp/piskel) 开
 }
 ```
 
-#### 3.4 日志与跨域（CORS）
-- 日志：每次 `POST /cook` 调用，调度服务都会将执行详情写入日志文件：
-  - 位置：`<hip所在目录>/export/serve/log/{uuid}.json`
-  - 内容：`uuid`、`ok`、`elapsed_ms_dispatch`、`returncode`、`stdout`、`stderr`、`worker_json`、`post`（含 json2jpg 结果）、`request`（含小写化后的 `parms`）
-  - 成功/失败/超时/异常均会尽力写入日志
-- 跨域：调度服务已开启基础 CORS 支持，允许从 `http://localhost:9901` 等本地页面访问。
+#### 3.4 统一日志系统与跨域（CORS）
+- **统一日志系统**：采用OOP设计，支持两类日志
+  - **详细日志**：`<hip所在目录>/export/serve/log/detail/{uuid}.json`
+    - 内容：`uuid`、`ok`、`elapsed_ms_dispatch`、`returncode`、`stdout`、`stderr`、`worker_json`、`post`（含 json2jpg 结果）、`request`（含小写化后的 `parms`）
+  - **用户宏观日志**：`<hip所在目录>/export/serve/log/users/{user_id}.json`
+    - 结构：`stack`（当前操作栈）+ `history`（被覆盖的历史操作）
+    - 支持：相同 `process_name` 的覆写逻辑，被截断的后续操作自动移入 `history`
+    - 命名：`{users}_{YYYYMMDDHHmm}.json`（如：`dallas_202508221713.json`）
+- **日志记录时机**：仅在任务成功（`ok == true`）时写入用户栈日志，失败不写入
+- **跨域**：调度服务已开启基础 CORS 支持，允许从 `http://localhost:9901` 等本地页面访问
 
 #### 3.5 约定
 - **hython 解析**：
@@ -170,6 +174,9 @@ Piskel2Houdini 是一个基于 [Piskel](https://github.com/piskelapp/piskel) 开
   - 工作脚本会依次尝试 `parm.set(value)` 与 `parmTuple.set([...])`
   - 找不到的参数返回在 `missing_parms`
 - **超时**：默认 600s，可在请求体 `timeout_sec` 指定
+- **用户标识**：
+  - 前端每次启动生成新的 `user_time`（`YYYYMMDDHHmm`格式）
+  - 请求体需包含：`user_id`（`{users}_{user_time}`）、`request_time`（ISO8601格式）
 
 ### 4. 本地Python脚本
 
@@ -270,8 +277,8 @@ Invoke-RestMethod -Uri "http://127.0.0.1:5050/cook" `
 ```
 *   观察调度服务控制台与日志文件 `<hip>/export/serve/log/{uuid}.json`
 *   检查生成的文件：
-  - `<hip>/export/serve/{uuid}.json`：Houdini 导出的像素数据
-  - `<hip>/export/serve/{uuid}.png`：转换后的 PNG 图片
+      - `<hip>/export/serve/{uuid}.json`：Houdini 导出的像素数据
+      - `<hip>/export/serve/{uuid}.png`：转换后的 PNG 图片
 
 
 ### 3.使用方法
@@ -280,8 +287,9 @@ Invoke-RestMethod -Uri "http://127.0.0.1:5050/cook" `
 *   在`PcgPreferencesController.js`中修改监听服务的url
 
 #### 3.2 新增其他前端任务
-*   设定前端，按照模板发送请求，含有相关任务信息
-*   实现新的处理器类，在 TASK_PROCESSORS 中注册
+*   设定HDA的基本功能，确认需要发送的参数等
+*   设定前端，按照模板发送请求，含有相关任务信息和参数信息
+*   实现新的处理器类的基本功能，在 TASK_PROCESSORS 中注册，确认HDA和HIP的调用
 
 ## 开发计划
 
@@ -298,20 +306,41 @@ Invoke-RestMethod -Uri "http://127.0.0.1:5050/cook" `
 
 ### 第二阶段-前端界面功能
 
-*   [x] 完成step2-发送房间信息给Hython服务，生成链接通路
+*   [x] 统一日志系统（OOP设计）
+  *   [x] 详细日志：`export/serve/log/detail/{uuid}.json`
+  *   [x] 用户宏观日志：`export/serve/log/users/{user_id}.json`
+  *   [x] 支持操作栈覆写与历史迁移
+*   [x] 完成step2/step3-发送房间信息给Hython服务，生成链接通路
+*   [x] 前端用户管理
+  *   [x] Users输入框（支持随机生成）
+  *   [x] 每次启动生成新的user_time
+  *   [x] 请求自动附加user_id与request_time
 
-### 第三阶段
+### 第三阶段-多人协作工具
 
 *   [x] 地牢布局生成算法
 *   [ ] 任务池功能
 
 ### 新增功能说明
 
+#### 统一日志系统架构
+- **设计理念**：采用OOP设计，统一管理两类日志的写入
+- **核心组件**：
+  - `LogSystem`：统一日志系统类，提供detail与users日志写入接口
+  - **详细日志**：按任务uuid记录完整执行信息
+  - **用户宏观日志**：按用户会话记录操作栈与历史
+- **特性**：
+  - 原子写入：使用临时文件+重命名确保数据完整性
+  - 自动目录创建：按需创建日志目录结构
+  - 栈式管理：支持相同process_name的覆写逻辑
+  - 历史迁移：被覆盖的操作自动移入history
+
 #### 插件化任务处理器架构
 - **设计理念**：每种任务类型对应一个处理器类，处理器负责自己的执行流程
 - **核心组件**：
   - `BaseTaskProcessor`：抽象基类，定义处理器接口
   - `RoomGenerationProcessor`：房间生成处理器（hython + JSON转PNG）
+  - `RoomRegenProcessor`：房间信息更新处理器（PNG→JSON + hython pressButton）
   - `TextureExportProcessor`：纹理导出处理器（待实现）
   - `LightingBakeProcessor`：光照烘焙处理器（待实现）
 - **优势**：
@@ -339,7 +368,9 @@ Invoke-RestMethod -Uri "http://127.0.0.1:5050/cook" `
 #### 文件输出
 - **JSON 数据**：`<hip>/export/serve/{uuid}.json`
 - **PNG 图片**：`<hip>/export/serve/{uuid}.png`
-- **日志记录**：`<hip>/export/serve/log/{uuid}.json`
+- **日志记录**：
+  - 详细日志：`<hip>/export/serve/log/detail/{uuid}.json`
+  - 用户宏观日志：`<hip>/export/serve/log/users/{users}_{YYYYMMDDHHmm}.json`
 
 #### 新增API接口
 - **`GET /tasks`**：列出支持的任务类型和默认任务类型

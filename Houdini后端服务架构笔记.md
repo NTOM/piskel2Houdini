@@ -30,30 +30,40 @@ Houdini后端服务是一个基于插件化任务处理器的HTTP服务系统，
 
 ```mermaid
 graph TB
-    Client[客户端] --> |HTTP POST| Dispatcher[调度服务]
-    Dispatcher --> |任务分发| TaskRegistry[任务注册表]
-    TaskRegistry --> |处理器选择| Processor[任务处理器]
-    Processor --> |子进程调用| HythonWorker[hython工作脚本]
-    HythonWorker --> |HIP文件操作| Houdini[Houdini引擎]
-    Processor --> |后置处理| PostProcessor[后置处理器]
-    PostProcessor --> |文件转换| Output[输出文件]
-    
-    subgraph "核心服务层"
+    Client[前端画板\nPiskel] -->|HTTP POST /cook| Dispatcher[调度服务dispatcher_server.py]
+    Dispatcher -->|任务分发| TaskRegistry[任务注册表TASK_PROCESSORS]
+    TaskRegistry -->|处理器选择| Processor[任务处理器BaseTaskProcessor]
+    Processor -->|子进程调用| HythonWorker[hython工作脚本hython_cook_.py]
+    HythonWorker -->|HIP文件操作| Houdini[Houdini引擎HDA文件]
+    Processor -->|后置处理| PostProcessor[后置处理器json2jpg.py/png2json.py]
+    PostProcessor -->|文件转换| Output[输出文件JSON/PNG]
+
+    Processor -->|写入日志| LogSystem[统一日志系统log_system.py]
+    LogSystem -->|detail日志| DetailLog[详细日志detail/<uuid>.json]
+    LogSystem -->|users日志| UsersLog[用户宏观日志users/<user_id>.json]
+
+    subgraph 前端层
+        Client
+    end
+
+    subgraph 后端服务层
         Dispatcher
         TaskRegistry
         Processor
     end
-    
-    subgraph "执行引擎层"
+
+    subgraph 执行引擎层
         HythonWorker
         Houdini
         PostProcessor
     end
-    
-    subgraph "数据层"
-        LogSystem[日志系统]
+
+    subgraph 数据层
+        LogSystem
         TempFiles[临时文件]
         Output
+        DetailLog
+        UsersLog
     end
 ```
 
@@ -61,28 +71,28 @@ graph TB
 
 ```mermaid
 graph LR
-    subgraph "API层"
-        A[Flask应用]
-        B[路由处理]
-        C[CORS支持]
+    subgraph "🟦 前端层"
+        A[Piskel画板]
+        B[PCG控制器]
+        C[用户设置管理]
     end
     
-    subgraph "业务逻辑层"
-        D[任务验证]
-        E[处理器选择]
-        F[执行调度]
+    subgraph "🟩 后端服务层"
+        D[Flask应用]
+        E[任务路由]
+        F[参数验证]
     end
     
-    subgraph "执行引擎层"
-        G[hython调用]
-        H[参数设置]
-        I[节点cook]
+    subgraph "🟨 执行引擎层"
+        G[任务处理器]
+        H[hython调用]
+        I[后置处理]
     end
     
-    subgraph "后置处理层"
-        J[JSON转PNG]
-        K[文件清理]
-        L[结果返回]
+    subgraph "🟥 数据层"
+        J[统一日志系统]
+        K[文件存储]
+        L[临时文件]
     end
 ```
 
@@ -99,6 +109,7 @@ graph LR
 *   任务类型验证
 *   处理器分发
 *   错误处理和响应格式化
+*   **用户栈日志管理**：成功响应后写入用户宏观日志
 
 **关键接口**：
 
@@ -107,6 +118,11 @@ graph LR
 *   `GET /result/png`：获取生成的PNG文件（用于room_generation任务）
 *   `GET /ping`：健康检查
 *   `GET /tasks`：获取支持的任务类型
+
+**日志逻辑**：
+*   任务执行成功后，检查请求体中的 `user_id`、`request_time`、`hip`、`uuid`
+*   调用 `LogSystem.append_or_replace_user_stack()` 更新用户栈日志
+*   用户栈日志路径：`export/serve/log/users/{user_id}.json`
 
 ### 2. 任务处理器 (task_processors.py)
 
@@ -117,6 +133,10 @@ graph LR
 *   `BaseTaskProcessor`：抽象基类（提供通用方法：参数归一、UUID提取、日志写入、子进程执行、hython解析等）
 *   `RoomGenerationProcessor`：房间生成处理器（hython + JSON→PNG）
 *   `RoomRegenProcessor`：房间信息更新处理器（PNG→JSON + hython pressButton）
+
+**日志集成**：
+*   统一调用 `LogSystem.write_detail_log()` 写入详细日志
+*   详细日志路径：`export/serve/log/detail/{uuid}.json`
 
 **设计模式**：
 
@@ -233,15 +253,15 @@ graph LR
 
 ```mermaid
 sequenceDiagram
-    participant Client as 客户端
-    participant Dispatcher as 调度服务
-    participant Processor as 房间生成处理器
-    participant Hython as hython工作脚本
-    participant Houdini as Houdini引擎
-    participant PostProc as 后置处理器
-    participant Log as 日志系统
+    participant Client as 🟦前端画板
+    participant Dispatcher as 🟩调度服务
+    participant Processor as 🟩房间生成处理器
+    participant Hython as 🟨hython工作脚本
+    participant Houdini as 🟨Houdini引擎
+    participant PostProc as 🟨后置处理器
+    participant LogSystem as 🟥统一日志系统
 
-    Client->>Dispatcher: POST /cook (room_generation)
+    Client->>Dispatcher: POST /cook (room_generation)<br/>+ user_id + request_time
     Dispatcher->>Processor: 获取处理器实例
     Processor->>Processor: 验证请求参数
     Processor->>Processor: 创建临时job.json
@@ -254,8 +274,9 @@ sequenceDiagram
     Processor->>PostProc: 启动后置处理
     PostProc->>PostProc: JSON转PNG处理
     PostProc-->>Processor: 返回处理结果
-    Processor->>Log: 记录执行日志（含 request_raw 原始请求）
+    Processor->>LogSystem: 写入详细日志<br/>detail/{uuid}.json
     Processor-->>Dispatcher: 返回完整结果
+    Dispatcher->>LogSystem: 成功时写入用户栈日志<br/>users/{user_id}.json
     Dispatcher-->>Client: HTTP响应
 ```
 
@@ -263,20 +284,20 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant Client as 客户端
-    participant Dispatcher as 调度服务
-    participant Upload as 文件上传服务
-    participant Processor as 房间信息更新处理器
-    participant Png2Json as PNG转JSON处理器
-    participant Hython as hython工作脚本
-    participant Houdini as Houdini引擎
-    participant Log as 日志系统
+    participant Client as 🟦前端画板
+    participant Dispatcher as 🟩调度服务
+    participant Upload as 🟩文件上传服务
+    participant Processor as 🟩房间信息更新处理器
+    participant Png2Json as 🟨PNG转JSON处理器
+    participant Hython as 🟨hython工作脚本
+    participant Houdini as 🟨Houdini引擎
+    participant LogSystem as 🟥统一日志系统
 
     Client->>Client: 导出spritesheet为PNG
     Client->>Upload: POST /upload/png (PNG文件)
     Upload->>Upload: 保存PNG到export/serve/<uuid>.png
     Upload-->>Client: 上传成功响应
-    Client->>Dispatcher: POST /cook (room_regen)
+    Client->>Dispatcher: POST /cook (room_regen)<br/>+ user_id + request_time
     Dispatcher->>Processor: 获取处理器实例
     Processor->>Processor: 验证请求参数
     Processor->>Png2Json: 启动PNG转JSON处理
@@ -290,8 +311,9 @@ sequenceDiagram
     Hython->>Houdini: 按下execute按钮
     Houdini-->>Hython: 返回执行结果
     Hython-->>Processor: 返回JSON结果
-    Processor->>Log: 记录执行日志（含 request_raw 原始请求）
+    Processor->>LogSystem: 写入详细日志<br/>detail/{uuid}.json
     Processor-->>Dispatcher: 返回完整结果
+    Dispatcher->>LogSystem: 成功时写入用户栈日志<br/>users/{user_id}.json
     Dispatcher-->>Client: HTTP响应
 ```
 
@@ -320,14 +342,22 @@ stateDiagram-v2
     返回错误 --> [*]
 ```
 
-## 日志系统
+## 统一日志系统
+
+### 日志架构
+
+**统一日志系统**：采用OOP设计，提供两类日志的写入接口
+- **LogSystem类**：`houdini/log_system.py`
+- **原子写入**：使用临时文件+重命名确保写入完整性
+- **自动目录创建**：按需创建日志目录结构
 
 ### 日志文件结构
 
 **日志目录**：`{HIP文件目录}/export/serve/log/`
-**日志文件**：`{UUID}.json`
+- **详细日志**：`detail/{UUID}.json`
+- **用户宏观日志**：`users/{user_id}.json`
 
-**日志内容结构**：
+**详细日志内容结构**：
 
 ```json
 {
@@ -362,19 +392,55 @@ stateDiagram-v2
 }
 ```
 
+**用户宏观日志内容结构**：
+
+```json
+{
+  "user_id": "dallas_202508221713",
+  "stack": [
+    {
+      "process_name": "room_generation",
+      "uuid": "uuid-1",
+      "request_time": "2025-08-22T17:13:45+08:00",
+      "status": "completed"
+    },
+    {
+      "process_name": "room_regen",
+      "uuid": "uuid-2", 
+      "request_time": "2025-08-22T17:15:20+08:00",
+      "status": "completed"
+    }
+  ],
+  "history": [
+    {
+      "process_name": "room_generation",
+      "uuid": "uuid-old",
+      "request_time": "2025-08-22T17:13:30+08:00",
+      "status": "replaced",
+      "replaced_at": "2025-08-22T17:13:45+08:00"
+    }
+  ],
+  "updated_at": "2025-08-22T17:15:20+08:00"
+}
+```
+
 ### 日志记录时机
 
 ```mermaid
 graph LR
-    A[任务开始] --> B[参数验证]
-    B --> C[hython执行]
-    C --> D[后置处理]
-    D --> E[记录日志]
-    E --> F[返回结果]
+    A[🟦任务开始] --> B[🟩参数验证]
+    B --> C[🟨hython执行]
+    C --> D[🟨后置处理]
+    D --> E[🟥记录详细日志<br/>detail/{uuid}.json]
+    E --> F[🟩返回结果]
     
-    B --> G[验证失败日志]
-    C --> H[执行失败日志]
-    D --> I[后置失败日志]
+    B --> G[🟥验证失败日志]
+    C --> H[🟥执行失败日志]
+    D --> I[🟥后置失败日志]
+    
+    F --> J{🟩任务成功?}
+    J -->|是| K[🟥写入用户栈日志<br/>users/{user_id}.json]
+    J -->|否| L[🟥不写入用户栈]
 ```
 
 ## 扩展机制

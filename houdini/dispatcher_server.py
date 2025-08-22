@@ -33,8 +33,10 @@ from flask import Flask, request, jsonify, send_file
 
 # 导入任务处理器
 from task_processors import get_task_processor, get_supported_task_types, DEFAULT_TASK_TYPE
+from log_system import LogSystem
 
 app = Flask(__name__)
+log_system = LogSystem()
 
 # 简单的 CORS 处理，允许从本地前端访问（如 http://localhost:9901）
 @app.after_request
@@ -154,11 +156,29 @@ def cook():
 		# 执行任务
 		result = processor.execute(payload)
 		
-		# 根据结果状态返回响应
-		if result.get("ok"):
-			return jsonify(result)
-		else:
-			return jsonify(result), 500
+		# 根据结果状态返回响应，并在成功时写入用户栈日志（如提供）
+		try:
+			if result.get("ok"):
+				user_id = payload.get("user_id") or payload.get("users")
+				request_time = payload.get("request_time") or payload.get("timestamp")
+				process_name = payload.get("task_type", DEFAULT_TASK_TYPE)
+				hip = payload.get("hip")
+				uuid_val = str(payload.get("uuid") or "").strip()
+				if user_id and request_time and hip and uuid_val:
+					log_system.append_or_replace_user_stack(
+						hip_path=hip,
+						user_id=user_id,
+						process_name=process_name,
+						uuid_val=uuid_val,
+						request_time_iso=request_time,
+						status="completed"
+					)
+				return jsonify(result)
+			else:
+				return jsonify(result), 500
+		except Exception:
+			# 日志失败不影响业务返回
+			return jsonify(result) if result.get("ok") else (jsonify(result), 500)
 			
 	except Exception as e:
 		return jsonify({

@@ -1,6 +1,13 @@
 <script type="text/html" id="templates/settings/preferences/pcg.html">
   <div class="preferences-panel-pcg">
     <div class="settings-item">
+      <label>Users</label>
+      <span style="display:inline-flex; align-items:center; gap:8px; vertical-align:middle;">
+        <input type="text" class="textfield  pcg-users-input" style="width: 120px;" autocomplete="off" name="pcg-users"/>
+        <button class="button pcg-users-random-btn" title="随机生成">Random</button>
+      </span>
+    </div>
+    <div class="settings-item">
       <label>Area layout seed</label>
       <input type="text" class="textfield  textfield-small  pcg-area-seed-input" autocomplete="off" name="pcg-area-seed"/>
     </div>

@@ -2,6 +2,8 @@
   var ns = $.namespace('pskl');
 
   ns.UserSettings = {
+    PCG_USERS : 'PCG_USERS',
+    PCG_USER_TIME_COMPACT : 'PCG_USER_TIME_COMPACT',
     AREA_LAYOUT_SEED : 'AREA_LAYOUT_SEED',
     GRID_COLOR : 'GRID_COLOR',
     GRID_ENABLED : 'GRID_ENABLED',
@@ -30,6 +32,8 @@
       'GRID_ENABLED' : false,
       'GRID_WIDTH' : 1,
       'GRID_SPACING' : 1,
+      'PCG_USERS' : '',
+      'PCG_USER_TIME_COMPACT' : '',
       'AREA_LAYOUT_SEED' : 9624,
       'MAX_FPS' : 24,
       'DEFAULT_SIZE' : {

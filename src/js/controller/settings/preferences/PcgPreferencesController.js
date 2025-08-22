@@ -9,6 +9,36 @@
   pskl.utils.inherit(ns.PcgPreferencesController, pskl.controller.settings.AbstractSettingController);
 
   ns.PcgPreferencesController.prototype.init = function () {
+    // 初始化 users 输入框（默认6位[a-zA-Z]随机）
+    var usersInput = document.querySelector('.pcg-users-input');
+    var currentUsers = pskl.UserSettings.get(pskl.UserSettings.PCG_USERS);
+    if (!currentUsers) {
+      currentUsers = this.generateRandomUsers_();
+      pskl.UserSettings.set(pskl.UserSettings.PCG_USERS, currentUsers);
+    }
+    // 初始化 user_time（紧凑型，北京时间，每次刷新都重新生成，确保每次刷新都是新会话）
+    var userTimeCompact = this.generateCompactBeijingTime_();
+    pskl.UserSettings.set(pskl.UserSettings.PCG_USER_TIME_COMPACT, userTimeCompact);
+    if (usersInput) {
+      usersInput.value = currentUsers;
+      this.addEventListener(usersInput, 'change', function (evt) {
+        var val = (evt.target.value || '').trim();
+        if (!val) {
+          val = this.generateRandomUsers_();
+        }
+        pskl.UserSettings.set(pskl.UserSettings.PCG_USERS, val);
+      }.bind(this));
+      // Random 按钮
+      var randomBtn = document.querySelector('.pcg-users-random-btn');
+      if (randomBtn) {
+        this.addEventListener(randomBtn, 'click', function () {
+          var newVal = this.generateRandomUsers_();
+          usersInput.value = newVal;
+          pskl.UserSettings.set(pskl.UserSettings.PCG_USERS, newVal);
+        }.bind(this));
+      }
+    }
+
     // 初始化 area_layout_seed 输入框
     var input = document.querySelector('.pcg-area-seed-input');
     var current = pskl.UserSettings.get(pskl.UserSettings.AREA_LAYOUT_SEED);
@@ -86,9 +116,18 @@
       'uuid': uuid
     });
 
-    // 5) 发送到本地调度服务（默认 5050 端口）
+    // 5) 组装 user_id 与 request_time（北京时间 ISO8601）
+    var users = pskl.UserSettings.get(pskl.UserSettings.PCG_USERS) || this.generateRandomUsers_();
+    var requestTime = this.generateBeijingIsoTime_();
+    var userTimeCompact = pskl.UserSettings.get(pskl.UserSettings.PCG_USER_TIME_COMPACT) ||
+      this.generateCompactBeijingTime_();
+    var userId = users + '_' + userTimeCompact;
+
+    // 6) 发送到本地调度服务（默认 5050 端口）
     try {
       var payload = JSON.parse(requestJsonString);
+      payload.user_id = userId;
+      payload.request_time = requestTime;
       var url = 'http://127.0.0.1:5050/cook';
       var hipPath = payload.hip;
       var self = this;
@@ -224,6 +263,12 @@
 
     try {
       var payload = JSON.parse(requestJsonString);
+      var users = pskl.UserSettings.get(pskl.UserSettings.PCG_USERS) || this.generateRandomUsers_();
+      var requestTime = this.generateBeijingIsoTime_();
+      var userTimeCompact = pskl.UserSettings.get(pskl.UserSettings.PCG_USER_TIME_COMPACT) ||
+        this.generateCompactBeijingTime_();
+      payload.user_id = users + '_' + userTimeCompact;
+      payload.request_time = requestTime;
       var url = 'http://127.0.0.1:5050/cook';
       var hipPath = payload.hip;
       var self = this;
@@ -337,6 +382,43 @@
       var v = c == 'x' ? r : (r & 0x3 | 0x8);
       return v.toString(16);
     });
+  };
+
+  /** 生成6位[a-zA-Z]随机字符串 */
+  ns.PcgPreferencesController.prototype.generateRandomUsers_ = function () {
+    var chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+    var out = '';
+    for (var i = 0; i < 6; i++) {
+      out += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return out;
+  };
+
+  /** 生成北京时间 ISO8601（到秒） */
+  ns.PcgPreferencesController.prototype.generateBeijingIsoTime_ = function () {
+    var d = new Date();
+    // 计算北京时间：基于本地时间偏移得到东八区时间
+    var utc = d.getTime() + (d.getTimezoneOffset() * 60000);
+    var bj = new Date(utc + 8 * 3600000);
+    // 格式化到秒，并附加+08:00偏移
+    var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+    var iso = bj.getFullYear() + '-' + pad(bj.getMonth() + 1) + '-' + pad(bj.getDate()) +
+      'T' + pad(bj.getHours()) + ':' + pad(bj.getMinutes()) + ':' + pad(bj.getSeconds()) + '+08:00';
+    return iso;
+  };
+
+  /** 生成紧凑型北京时间 YYYYMMDDHHmm（到分钟，用于文件名安全） */
+  ns.PcgPreferencesController.prototype.generateCompactBeijingTime_ = function () {
+    var d = new Date();
+    var utc = d.getTime() + (d.getTimezoneOffset() * 60000);
+    var bj = new Date(utc + 8 * 3600000);
+    var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+    var y = bj.getFullYear();
+    var m = pad(bj.getMonth() + 1);
+    var d2 = pad(bj.getDate());
+    var h = pad(bj.getHours());
+    var mm = pad(bj.getMinutes());
+    return '' + y + m + d2 + h + mm;
   };
 
   ns.PcgPreferencesController.prototype.destroy = function () {

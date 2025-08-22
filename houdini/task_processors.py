@@ -17,6 +17,9 @@ import tempfile
 import subprocess
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional, List
+from log_system import LogSystem
+
+log_system = LogSystem()
 
 
 class BaseTaskProcessor(ABC):
@@ -62,28 +65,7 @@ class BaseTaskProcessor(ABC):
             return uuid_guess
         return ""
 
-    def log_path_for_hip(self, hip_path: str, uuid_val: str) -> Optional[str]:
-        """计算日志文件路径：<hip_dir>/export/serve/log/<uuid>.json。"""
-        try:
-            hip_dir = os.path.dirname(hip_path or "")
-            if not hip_dir or not os.path.isdir(hip_dir) or not uuid_val:
-                return None
-            log_dir = os.path.join(hip_dir, "export", "serve", "log")
-            os.makedirs(log_dir, exist_ok=True)
-            return os.path.join(log_dir, f"{uuid_val}.json")
-        except Exception:
-            return None
-
-    def write_json_safely(self, path: Optional[str], data: Dict[str, Any]) -> None:
-        """安全写入 JSON 文件（忽略写入异常）。"""
-        if not path:
-            return
-        try:
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-                f.flush()
-        except Exception:
-            pass
+    # 统一改用 LogSystem 写入
 
     def resolve_hython_path(self, payload: Dict[str, Any]) -> str:
         """解析 hython 可执行文件路径（通用）。"""
@@ -281,7 +263,7 @@ class RoomGenerationProcessor(BaseTaskProcessor):
                 },
                 "request_raw": payload
             }
-            self.write_json_safely(self.log_path_for_hip(hip, uuid_val), log_obj)
+            log_system.write_detail_log(hip_path=hip, uuid_val=uuid_val, data=log_obj)
             
             # 组装最终响应
             if hython_res["returncode"] == 0 and worker_json and worker_json.get("ok"):
@@ -332,8 +314,7 @@ class RoomRegenProcessor(BaseTaskProcessor):
             hython_path = payload.get("hython", self.resolve_hython_path(payload))
             timeout_sec = payload.get("timeout_sec", 300)
             
-            # 日志记录
-            log_path = self.log_path_for_hip(hip, uuid)
+            # 日志记录（detail）
             log_data = {
                 "uuid": uuid,
                 "task_type": "room_regen",
@@ -446,7 +427,7 @@ class RoomRegenProcessor(BaseTaskProcessor):
                 "png2json_executed": True  # 标记已执行PNG->JSON转换
             })
             
-            self.write_json_safely(log_path, log_data)
+            log_system.write_detail_log(hip_path=hip, uuid_val=uuid, data=log_data)
             
             # 构建响应
             if worker_json and worker_json.get("ok"):
