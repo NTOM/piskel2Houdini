@@ -306,12 +306,12 @@ Invoke-RestMethod -Uri "http://127.0.0.1:5050/cook" `
 
 ### 第二阶段-前端界面功能
 
-*   [x] 统一日志系统（OOP设计）
+  *   [x] 统一日志系统（OOP设计）
   *   [x] 详细日志：`export/serve/log/detail/{uuid}.json`
   *   [x] 用户宏观日志：`export/serve/log/users/{user_id}.json`
   *   [x] 支持操作栈覆写与历史迁移
-*   [x] 完成step2/step3-发送房间信息给Hython服务，生成链接通路
-*   [x] 前端用户管理
+  *   [x] 完成step2/step3-发送房间信息给Hython服务，生成链接通路
+  *   [x] 前端用户管理
   *   [x] Users输入框（支持随机生成）
   *   [x] 每次启动生成新的user_time
   *   [x] 请求自动附加user_id与request_time
