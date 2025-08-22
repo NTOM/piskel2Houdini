@@ -30,6 +30,12 @@
     if (step1Btn) {
       this.addEventListener(step1Btn, 'click', this.onClickStep1_.bind(this));
     }
+
+    // 绑定 Step3 按钮（暂时为空实现）
+    var step3Btn = document.querySelector('.pcg-step3-btn');
+    if (step3Btn) {
+      this.addEventListener(step3Btn, 'click', this.onClickStep3_.bind(this));
+    }
   };
 
   ns.PcgPreferencesController.prototype.onSeedInput_ = function (evt) {
@@ -199,6 +205,14 @@
       overlay.parentNode.removeChild(overlay);
     }
     this._pcgOverlay_ = null;
+  };
+
+  /**
+   * Step3按钮点击处理（暂时为空实现）
+   */
+  ns.PcgPreferencesController.prototype.onClickStep3_ = function () {
+    console.log('[PCG] Step3 button clicked - functionality not implemented yet');
+    // TODO: 实现step3功能
   };
 
   /**
