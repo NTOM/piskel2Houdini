@@ -29,7 +29,7 @@ import json
 import traceback
 import argparse
 from typing import Any, Dict, Optional
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file
 
 # 导入任务处理器
 from task_processors import get_task_processor, get_supported_task_types, DEFAULT_TASK_TYPE
@@ -62,6 +62,27 @@ def list_tasks():
 		"default_task": DEFAULT_TASK_TYPE
 	})
 
+@app.route('/result/png', methods=['GET'])
+def fetch_png():
+	"""按 hip 与 uuid 返回生成的 PNG 文件。安全限制：仅允许访问 hip 同目录下 export/serve/<uuid>.png。"""
+	hip = request.args.get('hip') or ''
+	uuid_val = request.args.get('uuid') or ''
+	if not hip or not uuid_val:
+		return jsonify({'ok': False, 'error': 'missing hip or uuid'}), 400
+	# 计算目标路径
+	hip_dir = os.path.dirname(hip)
+	if not os.path.isdir(hip_dir):
+		return jsonify({'ok': False, 'error': 'invalid hip dir'}), 400
+	png_path = os.path.join(hip_dir, 'export', 'serve', f'{uuid_val}.png')
+	# 路径安全校验
+	base_real = os.path.realpath(hip_dir)
+	png_real = os.path.realpath(png_path)
+	if not png_real.startswith(base_real):
+		return jsonify({'ok': False, 'error': 'forbidden'}), 403
+	if not os.path.isfile(png_real):
+		return jsonify({'ok': False, 'error': 'file not found'}), 404
+	return send_file(png_real, mimetype='image/png')
+
 @app.route("/cook", methods=["POST"])
 def cook():
 	"""
@@ -69,8 +90,6 @@ def cook():
 	
 	支持的任务类型：
 	- room_generation: 房间生成（hython + JSON转PNG）
-	- texture_export: 纹理导出（待实现）
-	- lighting_bake: 光照烘焙（待实现）
 	"""
 	try:
 		# 读取并校验请求体

@@ -84,15 +84,121 @@
     try {
       var payload = JSON.parse(requestJsonString);
       var url = 'http://127.0.0.1:5050/cook';
+      var hipPath = payload.hip;
+      var self = this;
+
+      // 显示 Processing 遮罩
+      this.showProcessing_('Processing...');
+
       pskl.utils.Xhr.xhr_(url, 'POST', function (xhr) {
-        // 成功回调：简单提示
-        console.log('[PCG] Step1_RoomGen success:', xhr.responseText);
+        // 成功回调：打印结果
+        var text = xhr.responseText || '{}';
+        console.log('[PCG] Step1_RoomGen success:', text);
+        // 解析响应，尝试拉取PNG
+        try {
+          var resp = JSON.parse(text);
+          var respUuid = (resp && resp.post && resp.post.json && resp.post.json.uuid) ||
+            payload.uuid || uuid;
+          if (resp && resp.post && resp.post.ok && respUuid && hipPath) {
+            var pngUrl = 'http://127.0.0.1:5050/result/png?hip=' +
+              encodeURIComponent(hipPath) +
+              '&uuid=' + encodeURIComponent(respUuid);
+            self.fetchAndImportPng_(pngUrl, function () {
+              self.hideProcessing_();
+            });
+          } else {
+            // 没有有效的 post 结果，直接隐藏遮罩
+            self.hideProcessing_();
+          }
+        } catch (e) {
+          console.warn('[PCG] parse response failed:', e);
+          self.hideProcessing_();
+        }
       }, function (err, xhr) {
         console.error('[PCG] Step1_RoomGen error:', err, xhr && xhr.responseText);
+        self.hideProcessing_();
       }).send(JSON.stringify(payload));
     } catch (e) {
       console.error('[PCG] Step1_RoomGen invalid template JSON:', e);
+      this.hideProcessing_();
     }
+  };
+
+  /**
+   * 拉取PNG并导入到当前画布（复用Piskel内置导入流程）。
+   * @param {string} pngUrl
+   * @param {Function=} doneCb 结束回调（无论成功失败均调用）
+   */
+  ns.PcgPreferencesController.prototype.fetchAndImportPng_ = function (pngUrl, doneCb) {
+    try {
+      var xhr = new XMLHttpRequest();
+      xhr.open('GET', pngUrl, true);
+      xhr.responseType = 'blob';
+      xhr.onload = function () {
+        if (xhr.status === 200) {
+          var blob = xhr.response;
+          try {
+            var file = new File([blob], 'pcg-result.png', {type: 'image/png'});
+            $.publish(Events.DIALOG_SHOW, {
+              dialogId: 'import',
+              initArgs: { rawFiles: [file] }
+            });
+            console.log('[PCG] PNG fetched and passed to Import dialog');
+          } catch (e) {
+            console.error('[PCG] wrap blob to File failed:', e);
+          }
+        } else {
+          console.error('[PCG] fetch png failed:', xhr.status, xhr.responseText);
+        }
+        if (doneCb) { doneCb(); }
+      };
+      xhr.onerror = function (e) {
+        console.error('[PCG] fetch png xhr error:', e);
+        if (doneCb) { doneCb(); }
+      };
+      xhr.send();
+    } catch (e) {
+      console.error('[PCG] fetchAndImportPng_ failed:', e);
+      if (doneCb) { doneCb(); }
+    }
+  };
+
+  /** 显示Processing遮罩 */
+  ns.PcgPreferencesController.prototype.showProcessing_ = function (text) {
+    if (this._pcgOverlay_) { return; }
+    var overlay = document.createElement('div');
+    overlay.className = 'pcg-processing-overlay';
+    overlay.style.position = 'fixed';
+    overlay.style.left = '0';
+    overlay.style.top = '0';
+    overlay.style.right = '0';
+    overlay.style.bottom = '0';
+    overlay.style.background = 'rgba(0,0,0,0.4)';
+    overlay.style.zIndex = '10000';
+    overlay.style.display = 'flex';
+    overlay.style.alignItems = 'center';
+    overlay.style.justifyContent = 'center';
+
+    var box = document.createElement('div');
+    box.style.background = '#222';
+    box.style.color = '#fff';
+    box.style.padding = '16px 24px';
+    box.style.borderRadius = '6px';
+    box.style.fontSize = '14px';
+    box.textContent = text || 'Processing...';
+
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    this._pcgOverlay_ = overlay;
+  };
+
+  /** 隐藏Processing遮罩 */
+  ns.PcgPreferencesController.prototype.hideProcessing_ = function () {
+    var overlay = this._pcgOverlay_;
+    if (overlay && overlay.parentNode) {
+      overlay.parentNode.removeChild(overlay);
+    }
+    this._pcgOverlay_ = null;
   };
 
   /**
