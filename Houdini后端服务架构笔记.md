@@ -30,7 +30,7 @@ Houdini后端服务是一个基于插件化任务处理器的HTTP服务系统，
 
 ```mermaid
 graph TB
-    Client[前端画板\nPiskel] -->|HTTP POST /cook| Dispatcher[调度服务dispatcher_server.py]
+    Client[前端画板Piskel] -->|HTTP POST /cook| Dispatcher[调度服务dispatcher_server.py]
     Dispatcher -->|任务分发| TaskRegistry[任务注册表TASK_PROCESSORS]
     TaskRegistry -->|处理器选择| Processor[任务处理器BaseTaskProcessor]
     Processor -->|子进程调用| HythonWorker[hython工作脚本hython_cook_.py]
@@ -39,8 +39,8 @@ graph TB
     PostProcessor -->|文件转换| Output[输出文件JSON/PNG]
 
     Processor -->|写入日志| LogSystem[统一日志系统log_system.py]
-    LogSystem -->|detail日志| DetailLog[详细日志detail/<uuid>.json]
-    LogSystem -->|users日志| UsersLog[用户宏观日志users/<user_id>.json]
+    LogSystem -->|detail日志| DetailLog[详细日志detail/uuid.json]
+    LogSystem -->|users日志| UsersLog[用户宏观日志users/user_id.json]
 
     subgraph 前端层
         Client
@@ -98,7 +98,7 @@ graph LR
 
 ## 核心组件
 
-### 1. 调度服务 (dispatcher_server.py)
+### 1. 调度服务 (dispatcher\_server.py)
 
 **职责**：HTTP服务入口、任务路由、响应处理
 
@@ -114,17 +114,18 @@ graph LR
 **关键接口**：
 
 *   `POST /cook`：执行任务的主要接口
-*   `POST /upload/png`：接收前端上传的PNG文件（用于room_regen任务）
-*   `GET /result/png`：获取生成的PNG文件（用于room_generation任务）
+*   `POST /upload/png`：接收前端上传的PNG文件（用于room\_regen任务）
+*   `GET /result/png`：获取生成的PNG文件（用于room\_generation任务）
 *   `GET /ping`：健康检查
 *   `GET /tasks`：获取支持的任务类型
 
 **日志逻辑**：
+
 *   任务执行成功后，检查请求体中的 `user_id`、`request_time`、`hip`、`uuid`
 *   调用 `LogSystem.append_or_replace_user_stack()` 更新用户栈日志
 *   用户栈日志路径：`export/serve/log/users/{user_id}.json`
 
-### 2. 任务处理器 (task_processors.py)
+### 2. 任务处理器 (task\_processors.py)
 
 **职责**：具体任务的执行逻辑、参数验证、结果处理
 
@@ -135,6 +136,7 @@ graph LR
 *   `RoomRegenProcessor`：房间信息更新处理器（PNG→JSON + hython pressButton）
 
 **日志集成**：
+
 *   统一调用 `LogSystem.write_detail_log()` 写入详细日志
 *   详细日志路径：`export/serve/log/detail/{uuid}.json`
 
@@ -241,13 +243,13 @@ graph LR
 
 ### 任务流程对比
 
-| 特性 | room_generation | room_regen |
-|------|----------------|------------|
-| **输入** | 参数设置 | 参数设置 + PNG文件上传 |
-| **处理** | hython cook节点 | PNG→JSON转换 + hython pressButton |
-| **输出** | JSON + PNG文件 | 仅执行结果（无文件输出） |
-| **文件流** | 无 → JSON → PNG | PNG → JSON → 无 |
-| **用途** | 生成初始房间布局 | 基于现有布局更新房间信息 |
+| 特性      | room\_generation | room\_regen                     |
+| ------- | ---------------- | ------------------------------- |
+| **输入**  | 参数设置             | 参数设置 + PNG文件上传                  |
+| **处理**  | hython cook节点    | PNG→JSON转换 + hython pressButton |
+| **输出**  | JSON + PNG文件     | 仅执行结果（无文件输出）                    |
+| **文件流** | 无 → JSON → PNG   | PNG → JSON → 无                  |
+| **用途**  | 生成初始房间布局         | 基于现有布局更新房间信息                    |
 
 ### 房间生成任务完整流程
 
@@ -347,15 +349,17 @@ stateDiagram-v2
 ### 日志架构
 
 **统一日志系统**：采用OOP设计，提供两类日志的写入接口
-- **LogSystem类**：`houdini/log_system.py`
-- **原子写入**：使用临时文件+重命名确保写入完整性
-- **自动目录创建**：按需创建日志目录结构
+
+*   **LogSystem类**：`houdini/log_system.py`
+*   **原子写入**：使用临时文件+重命名确保写入完整性
+*   **自动目录创建**：按需创建日志目录结构
 
 ### 日志文件结构
 
 **日志目录**：`{HIP文件目录}/export/serve/log/`
-- **详细日志**：`detail/{UUID}.json`
-- **用户宏观日志**：`users/{user_id}.json`
+
+*   **详细日志**：`detail/{UUID}.json`
+*   **用户宏观日志**：`users/{user_id}.json`
 
 **详细日志内容结构**：
 
@@ -541,6 +545,7 @@ python houdini/dispatcher_server.py --debug
 ### 配置文件
 
 **环境变量配置**：
+
 *   将项目的环境变量添加到houdini的环境变量中
 
 **服务配置**：
@@ -591,7 +596,7 @@ app.run(debug=True, use_reloader=False)
 
 *   job.json：任务配置
 *   result.json：执行结果
-*   日志文件：完整执行记录（包含 request_raw 原始请求）
+*   日志文件：完整执行记录（包含 request\_raw 原始请求）
 
 **性能监控**：
 
@@ -626,3 +631,4 @@ graph TB
 ```
 
 ***
+
