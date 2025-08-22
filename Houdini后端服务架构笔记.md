@@ -103,6 +103,8 @@ graph LR
 **关键接口**：
 
 *   `POST /cook`：执行任务的主要接口
+*   `POST /upload/png`：接收前端上传的PNG文件（用于room_regen任务）
+*   `GET /result/png`：获取生成的PNG文件（用于room_generation任务）
 *   `GET /ping`：健康检查
 *   `GET /tasks`：获取支持的任务类型
 
@@ -114,6 +116,7 @@ graph LR
 
 *   `BaseTaskProcessor`：抽象基类（提供通用方法：参数归一、UUID提取、日志写入、子进程执行、hython解析等）
 *   `RoomGenerationProcessor`：房间生成处理器（hython + JSON→PNG）
+*   `RoomRegenProcessor`：房间信息更新处理器（PNG→JSON + hython pressButton）
 
 **设计模式**：
 
@@ -121,7 +124,7 @@ graph LR
 *   工厂模式：通过注册表获取处理器实例
 *   模板方法：基类提供通用流程和工具函数，子类关注具体步骤
 
-### 3. hython工作脚本 (hython_cook_worker.py)
+### 3. hython工作脚本
 
 **职责**：在Houdini环境中执行具体操作
 
@@ -132,6 +135,11 @@ graph LR
 *   节点cook执行
 *   错误收集和报告
 *   结果序列化
+
+**具体实现**：
+
+*   `hython_cook_worker.py`：房间生成任务（设置参数 + cook节点）
+*   `hython_cook_press.py`：房间信息更新任务（设置参数 + 按下execute按钮）
 
 ## 通信协议
 
@@ -147,12 +155,13 @@ graph LR
 
 ```json
 {
-  "task_type": "room_generation",
+  "task_type": "room_generation",  // 或 "room_regen"
   "hip": "C:/path/to/file.hip",
   "cook_node": "/obj/geo1/OUT",
   "parm_node": "/obj/geo1/INPUT",
   "uuid": "123e4567-e89b-12d3-a456-426614174000",
-  "parms": {"area_layout_seed": 9624, "room_file": "<uuid>.json"},
+  "parms": {"area_layout_seed": 9624, "room_file": "<uuid>.json"},  // room_generation
+  // 或 "parms": {"room_recalculate_file": "<uuid>", "room_recalculate_input": "<uuid>"}  // room_regen
   "hython": "C:/Program Files/Side Effects Software/Houdini 19.5.716/bin/hython.exe",
   "hfs": "C:/Program Files/Side Effects Software/Houdini 19.5.716",
   "timeout_sec": 600,
@@ -160,6 +169,11 @@ graph LR
   "post_wait_sec": 5
 }
 ```
+
+**支持的任务类型**：
+
+*   `room_generation`：房间生成任务（参数设置 + cook节点 + JSON→PNG）
+*   `room_regen`：房间信息更新任务（PNG→JSON + 参数设置 + pressButton）
 
 ### 响应格式
 
@@ -203,7 +217,17 @@ graph LR
 }
 ```
 
-## 工作流程
+## 工作流程-部分示例
+
+### 任务流程对比
+
+| 特性 | room_generation | room_regen |
+|------|----------------|------------|
+| **输入** | 参数设置 | 参数设置 + PNG文件上传 |
+| **处理** | hython cook节点 | PNG→JSON转换 + hython pressButton |
+| **输出** | JSON + PNG文件 | 仅执行结果（无文件输出） |
+| **文件流** | 无 → JSON → PNG | PNG → JSON → 无 |
+| **用途** | 生成初始房间布局 | 基于现有布局更新房间信息 |
 
 ### 房间生成任务完整流程
 
@@ -230,6 +254,42 @@ sequenceDiagram
     Processor->>PostProc: 启动后置处理
     PostProc->>PostProc: JSON转PNG处理
     PostProc-->>Processor: 返回处理结果
+    Processor->>Log: 记录执行日志（含 request_raw 原始请求）
+    Processor-->>Dispatcher: 返回完整结果
+    Dispatcher-->>Client: HTTP响应
+```
+
+### 房间信息更新任务完整流程
+
+```mermaid
+sequenceDiagram
+    participant Client as 客户端
+    participant Dispatcher as 调度服务
+    participant Upload as 文件上传服务
+    participant Processor as 房间信息更新处理器
+    participant Png2Json as PNG转JSON处理器
+    participant Hython as hython工作脚本
+    participant Houdini as Houdini引擎
+    participant Log as 日志系统
+
+    Client->>Client: 导出spritesheet为PNG
+    Client->>Upload: POST /upload/png (PNG文件)
+    Upload->>Upload: 保存PNG到export/serve/<uuid>.png
+    Upload-->>Client: 上传成功响应
+    Client->>Dispatcher: POST /cook (room_regen)
+    Dispatcher->>Processor: 获取处理器实例
+    Processor->>Processor: 验证请求参数
+    Processor->>Png2Json: 启动PNG转JSON处理
+    Png2Json->>Png2Json: 读取PNG，转换为JSON格式
+    Png2Json->>Png2Json: 保存JSON到export/serve/<uuid>.json
+    Png2Json-->>Processor: 返回转换结果
+    Processor->>Processor: 创建临时job.json
+    Processor->>Hython: 启动hython子进程
+    Hython->>Houdini: 加载HIP文件
+    Hython->>Houdini: 设置节点参数
+    Hython->>Houdini: 按下execute按钮
+    Houdini-->>Hython: 返回执行结果
+    Hython-->>Processor: 返回JSON结果
     Processor->>Log: 记录执行日志（含 request_raw 原始请求）
     Processor-->>Dispatcher: 返回完整结果
     Dispatcher-->>Client: HTTP响应
@@ -336,6 +396,11 @@ class NewTaskProcessor(BaseTaskProcessor):
         pass
 ```
 
+**现有处理器示例**：
+
+*   `RoomGenerationProcessor`：房间生成（hython + JSON→PNG）
+*   `RoomRegenProcessor`：房间信息更新（PNG→JSON + hython pressButton）
+
 **步骤2**：注册到处理器注册表
 
 ```python
@@ -371,7 +436,12 @@ classDiagram
         +execute(payload: dict): dict
     }
     
+    class RoomRegenProcessor {
+        +execute(payload: dict): dict
+    }
+    
     BaseTaskProcessor <|-- RoomGenerationProcessor
+    BaseTaskProcessor <|-- RoomRegenProcessor
 ```
 
 ## 部署与配置

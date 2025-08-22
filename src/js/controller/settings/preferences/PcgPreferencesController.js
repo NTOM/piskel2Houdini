@@ -208,11 +208,122 @@
   };
 
   /**
-   * Step3按钮点击处理（暂时为空实现）
+   * Step3按钮点击处理（room_regen任务）
    */
   ns.PcgPreferencesController.prototype.onClickStep3_ = function () {
-    console.log('[PCG] Step3 button clicked - functionality not implemented yet');
-    // TODO: 实现step3功能
+    var template = pskl.utils.Template.get('pcg-step3-request-template');
+    if (!template) { return; }
+
+    var uuid = this.generateUUID_();
+
+    var requestJsonString = pskl.utils.Template.replace(template, {
+      'uuid': uuid,
+      'room_recalculate_file': uuid,
+      'room_recalculate_input': uuid
+    });
+
+    try {
+      var payload = JSON.parse(requestJsonString);
+      var url = 'http://127.0.0.1:5050/cook';
+      var hipPath = payload.hip;
+      var self = this;
+
+      this.showProcessing_('Processing...');
+
+      // 1) 先导出spritesheet为PNG Blob
+      this.exportSpritesheetAsBlob_(function (blob) {
+        if (!blob) {
+          console.error('[PCG] Step3 export sprite failed: empty blob');
+          self.hideProcessing_();
+          return;
+        }
+        var filename = uuid + '.png';
+        // 2) 先上传PNG到后端
+        self.uploadPngToServer_(blob, filename, hipPath, uuid, function (ok) {
+          if (!ok) {
+            console.error('[PCG] Step3 upload png failed');
+            self.hideProcessing_();
+            return;
+          }
+          // 3) 上传成功后，再发送/cook请求，不再拉取结果PNG
+          pskl.utils.Xhr.xhr_(url, 'POST', function (xhr) {
+            var text = xhr.responseText || '{}';
+            console.log('[PCG] Step3_RoomRegen success:', text);
+            self.hideProcessing_();
+          }, function (err, xhr) {
+            console.error('[PCG] Step3_RoomRegen error:', err, xhr && xhr.responseText);
+            self.hideProcessing_();
+          }).send(JSON.stringify(payload));
+        });
+      });
+    } catch (e) {
+      console.error('[PCG] Step3_RoomRegen invalid template JSON:', e);
+      this.hideProcessing_();
+    }
+  };
+
+  /**
+   * 导出当前工程为spritesheet PNG的Blob（等价于导出面板中的download行为，默认zoom=1，最佳列数）
+   * @param {Function} cb 接收一个Blob参数
+   */
+  ns.PcgPreferencesController.prototype.exportSpritesheetAsBlob_ = function (cb) {
+    try {
+      var piskelController = this.piskelController;
+      var renderer = new pskl.rendering.PiskelRenderer(piskelController);
+      var columns = this.computeBestFitColumns_();
+      var rows = Math.ceil(piskelController.getFrameCount() / columns);
+      var canvas = renderer.renderAsCanvas(columns, rows);
+      // 目前固定zoom=1；如需一致与导出面板，可扩展读取exportController的zoom
+      pskl.utils.BlobUtils.canvasToBlob(canvas, function (blob) {
+        cb(blob);
+      });
+    } catch (e) {
+      console.error('[PCG] exportSpritesheetAsBlob_ failed:', e);
+      cb(null);
+    }
+  };
+
+  /** 计算与导出面板一致的最佳列数 */
+  ns.PcgPreferencesController.prototype.computeBestFitColumns_ = function () {
+    try {
+      var ratio = this.piskelController.getWidth() / this.piskelController.getHeight();
+      var frameCount = this.piskelController.getFrameCount();
+      var bestFit = Math.round(Math.sqrt(frameCount / ratio));
+      // clamp到[1, frameCount]
+      return pskl.utils.Math.minmax(bestFit, 1, frameCount);
+    } catch (e) {
+      return 1;
+    }
+  };
+
+  /**
+   * 上传PNG到后端
+   * 约定后端存在POST /upload/png?hip=<...>&uuid=<...> 接收文件字段为file
+   */
+  ns.PcgPreferencesController.prototype.uploadPngToServer_ = function (blob, filename, hipPath, uuid, cb) {
+    try {
+      var form = new FormData();
+      form.append('file', blob, filename);
+      var uploadUrl = 'http://127.0.0.1:5050/upload/png?hip=' + encodeURIComponent(hipPath) +
+        '&uuid=' + encodeURIComponent(uuid);
+      var xhr = new XMLHttpRequest();
+      xhr.open('POST', uploadUrl, true);
+      xhr.onload = function () {
+        var ok = (xhr.status >= 200 && xhr.status < 300);
+        if (!ok) {
+          console.error('[PCG] upload response:', xhr.status, xhr.responseText);
+        }
+        cb(!!ok);
+      };
+      xhr.onerror = function (e) {
+        console.error('[PCG] upload xhr error:', e);
+        cb(false);
+      };
+      xhr.send(form);
+    } catch (e) {
+      console.error('[PCG] uploadPngToServer_ failed:', e);
+      cb(false);
+    }
   };
 
   /**

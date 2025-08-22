@@ -83,6 +83,45 @@ def fetch_png():
 		return jsonify({'ok': False, 'error': 'file not found'}), 404
 	return send_file(png_real, mimetype='image/png')
 
+@app.route('/upload/png', methods=['POST'])
+def upload_png():
+    """接收前端上传的 PNG 文件，并保存到 hip 同目录下 export/serve/<uuid>.png。
+
+    参数：
+      - querystring: hip, uuid
+      - form-data: file (PNG 文件)
+    """
+    try:
+        hip = request.args.get('hip') or ''
+        uuid_val = request.args.get('uuid') or ''
+        if not hip or not uuid_val:
+            return jsonify({'ok': False, 'error': 'missing hip or uuid'}), 400
+
+        hip_dir = os.path.dirname(hip)
+        if not os.path.isdir(hip_dir):
+            return jsonify({'ok': False, 'error': 'invalid hip dir'}), 400
+
+        # 获取文件
+        if 'file' not in request.files:
+            return jsonify({'ok': False, 'error': 'missing file field'}), 400
+        f = request.files['file']
+        if not f.filename:
+            return jsonify({'ok': False, 'error': 'empty filename'}), 400
+
+        # 目标路径与安全校验
+        out_dir = os.path.join(hip_dir, 'export', 'serve')
+        os.makedirs(out_dir, exist_ok=True)
+        out_path = os.path.join(out_dir, f'{uuid_val}.png')
+        base_real = os.path.realpath(hip_dir)
+        out_real = os.path.realpath(out_path)
+        if not out_real.startswith(base_real):
+            return jsonify({'ok': False, 'error': 'forbidden'}), 403
+
+        f.save(out_real)
+        return jsonify({'ok': True, 'path': out_real, 'uuid': uuid_val})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
 @app.route("/cook", methods=["POST"])
 def cook():
 	"""

@@ -304,9 +304,175 @@ class RoomGenerationProcessor(BaseTaskProcessor):
             return {"ok": False, "error": str(e)}
 
 
+class RoomRegenProcessor(BaseTaskProcessor):
+    """处理room_regen任务的处理器（房间重新生成）"""
+    
+    def can_handle(self, task_type: str) -> bool:
+        return task_type == "room_regen"
+    
+    def get_required_fields(self) -> List[str]:
+        return ["hip", "cook_node", "uuid"]
+    
+    def execute(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        执行room_regen任务：
+        1. 运行png2json.py将前端上传的PNG转换为JSON（供Houdini使用）
+        2. 运行hython_cook_press.py设置参数并按下execute按钮
+        3. 返回执行结果（不需要JSON->PNG转换，因为前端已上传PNG）
+        """
+        try:
+            start_time = time.time()
+            
+            # 提取和验证参数
+            hip = payload["hip"]
+            cook_node = payload["cook_node"]
+            parm_node = payload.get("parm_node", cook_node)
+            parms = self.normalize_parms(payload.get("parms", {}))
+            uuid = self.extract_uuid(payload, parms)
+            hython_path = payload.get("hython", self.resolve_hython_path(payload))
+            timeout_sec = payload.get("timeout_sec", 300)
+            
+            # 日志记录
+            log_path = self.log_path_for_hip(hip, uuid)
+            log_data = {
+                "uuid": uuid,
+                "task_type": "room_regen",
+                "timestamp": time.time(),
+                "request_raw": payload
+            }
+            
+            # 执行hython worker（press 版本）
+            worker = os.path.join(os.path.dirname(__file__), 'hython_cook_press.py')
+            
+            # 先执行 PNG→JSON 转换（前端已上传PNG）
+            png2json_script = os.path.join(os.path.dirname(__file__), 'png2json.py')
+            if os.path.isfile(png2json_script):
+                hip_dir = os.path.dirname(os.path.abspath(hip))
+                png2json_cmd = ["python", png2json_script, "--hip", hip_dir, "--uuid", uuid]
+                
+                try:
+                    png2json_res = self.run_subprocess(png2json_cmd, 60)
+                    png2json_stdout = png2json_res["stdout"]
+                    if png2json_stdout:
+                        try:
+                            png2json_info = json.loads(png2json_stdout)
+                            if not png2json_info.get("ok"):
+                                return {
+                                    "ok": False,
+                                    "error": f"PNG转JSON失败: {png2json_info.get('error', 'unknown error')}",
+                                    "png2json": png2json_info
+                                }
+                        except Exception:
+                            return {
+                                "ok": False,
+                                "error": "解析png2json输出失败",
+                                "png2json_stdout": png2json_stdout
+                            }
+                    else:
+                        return {
+                            "ok": False,
+                            "error": "png2json无输出"
+                        }
+                except Exception as e:
+                    return {
+                        "ok": False,
+                        "error": f"执行png2json失败: {str(e)}"
+                    }
+            else:
+                return {
+                    "ok": False,
+                    "error": f"找不到png2json脚本: {png2json_script}"
+                }
+            
+            job_data = {
+                "hip": hip,
+                "cook_node": cook_node,
+                "parm_node": parm_node,
+                "uuid": uuid,
+                "parms": parms
+            }
+            
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8") as tf:
+                json.dump(job_data, tf, ensure_ascii=False, indent=2)
+                job_path = tf.name
+            
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8") as tf:
+                result_path = tf.name
+            
+            child_env = os.environ.copy()
+            child_env["PYTHONIOENCODING"] = "utf-8"
+            hython_cmd = [hython_path, worker, "--job", job_path, "--out", result_path]
+            try:
+                hython_res = self.run_subprocess(hython_cmd, timeout_sec, env=child_env)
+            finally:
+                try:
+                    os.remove(job_path)
+                except Exception:
+                    pass
+            
+            elapsed_ms = hython_res["elapsed_ms"]
+            stdout = hython_res["stdout"]
+            stderr = hython_res["stderr"]
+            
+            # 解析 worker 输出
+            worker_json: Optional[Dict[str, Any]] = None
+            if stdout:
+                try:
+                    worker_json = json.loads(stdout)
+                except Exception:
+                    worker_json = None
+            if worker_json is None and os.path.isfile(result_path):
+                try:
+                    with open(result_path, "r", encoding="utf-8") as rf:
+                        worker_json = json.load(rf)
+                except Exception:
+                    worker_json = None
+                finally:
+                    try:
+                        os.remove(result_path)
+                    except Exception:
+                        pass
+                        
+            # room_regen 不需要 JSON->PNG 后处理（前端已上传PNG）
+            post_info = {"ok": True, "note": "no post process for room_regen"}
+            
+            # 记录完整日志
+            log_data.update({
+                "elapsed_ms": elapsed_ms,
+                "worker_stdout": stdout,
+                "worker_stderr": stderr,
+                "worker_json": worker_json,
+                "post": post_info,
+                "png2json_executed": True  # 标记已执行PNG->JSON转换
+            })
+            
+            self.write_json_safely(log_path, log_data)
+            
+            # 构建响应
+            if worker_json and worker_json.get("ok"):
+                resp = worker_json.copy()
+                resp["elapsed_ms_dispatch"] = elapsed_ms
+                resp["post"] = post_info
+                return resp
+            else:
+                return {
+                    "ok": False,
+                    "elapsed_ms_dispatch": elapsed_ms,
+                    "returncode": hython_res["returncode"],
+                    "stdout": stdout,
+                    "stderr": stderr,
+                    "worker_json": worker_json,
+                    "post": post_info,
+                }
+                
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+
 # 任务处理器注册表
 TASK_PROCESSORS = {
     "room_generation": RoomGenerationProcessor(),
+    "room_regen": RoomRegenProcessor(),
 }
 
 # 默认任务类型
