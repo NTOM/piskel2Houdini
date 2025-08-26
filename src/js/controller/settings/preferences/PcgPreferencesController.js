@@ -16,11 +16,14 @@
       currentUsers = this.generateRandomUsers_();
       pskl.UserSettings.set(pskl.UserSettings.PCG_USERS, currentUsers);
     }
-    // 初始化 user_time（紧凑型，北京时间，只在第一次使用时生成，确保同一会话使用相同时间戳）
-    var userTimeCompact = pskl.UserSettings.get(pskl.UserSettings.PCG_USER_TIME_COMPACT);
+    // 初始化 user_time（会话级）：存入 sessionStorage，关闭页面后自动失效
+    var userTimeCompact = null;
+    try {
+      userTimeCompact = window.sessionStorage.getItem('PCG_USER_TIME_COMPACT');
+    } catch (e) {}
     if (!userTimeCompact) {
       userTimeCompact = this.generateCompactBeijingTime_();
-      pskl.UserSettings.set(pskl.UserSettings.PCG_USER_TIME_COMPACT, userTimeCompact);
+      try { window.sessionStorage.setItem('PCG_USER_TIME_COMPACT', userTimeCompact); } catch (e) {}
     }
     if (usersInput) {
       usersInput.value = currentUsers;
@@ -122,11 +125,12 @@
     // 5) 组装 user_id 与 request_time（北京时间 ISO8601）
     var users = pskl.UserSettings.get(pskl.UserSettings.PCG_USERS) || this.generateRandomUsers_();
     var requestTime = this.generateBeijingIsoTime_();
-    var userTimeCompact = pskl.UserSettings.get(pskl.UserSettings.PCG_USER_TIME_COMPACT);
-    // 确保 userTimeCompact 存在，如果不存在说明是第一次使用，需要生成
+    var userTimeCompact = null;
+    try { userTimeCompact = window.sessionStorage.getItem('PCG_USER_TIME_COMPACT'); } catch (e) {}
+    // 确保 userTimeCompact 存在（极端情况下会话中缺失时重新生成）
     if (!userTimeCompact) {
       userTimeCompact = this.generateCompactBeijingTime_();
-      pskl.UserSettings.set(pskl.UserSettings.PCG_USER_TIME_COMPACT, userTimeCompact);
+      try { window.sessionStorage.setItem('PCG_USER_TIME_COMPACT', userTimeCompact); } catch (e) {}
     }
     var userId = users + '_' + userTimeCompact;
 
@@ -272,11 +276,12 @@
       var payload = JSON.parse(requestJsonString);
       var users = pskl.UserSettings.get(pskl.UserSettings.PCG_USERS) || this.generateRandomUsers_();
       var requestTime = this.generateBeijingIsoTime_();
-      var userTimeCompact = pskl.UserSettings.get(pskl.UserSettings.PCG_USER_TIME_COMPACT);
-      // 确保 userTimeCompact 存在，如果不存在说明是第一次使用，需要生成
+      var userTimeCompact = null;
+      try { userTimeCompact = window.sessionStorage.getItem('PCG_USER_TIME_COMPACT'); } catch (e) {}
+      // 确保 userTimeCompact 存在（极端情况下会话中缺失时重新生成）
       if (!userTimeCompact) {
         userTimeCompact = this.generateCompactBeijingTime_();
-        pskl.UserSettings.set(pskl.UserSettings.PCG_USER_TIME_COMPACT, userTimeCompact);
+        try { window.sessionStorage.setItem('PCG_USER_TIME_COMPACT', userTimeCompact); } catch (e) {}
       }
       payload.user_id = users + '_' + userTimeCompact;
       payload.request_time = requestTime;
