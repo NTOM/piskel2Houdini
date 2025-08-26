@@ -88,6 +88,8 @@ Piskel2Houdini 是一个基于 [Piskel](https://github.com/piskelapp/piskel) 开
 
 - **目前支持的任务类型**
     - **room_generation**（默认）：房间生成，执行 hython + JSON转PNG 流程
+    - **room_regen**：房间信息更新，执行 PNG→JSON + hython pressButton 流程
+    - **list_themes**：主题配置查询，读取配置文件并返回主题信息
 
 #### 3.2 流程
 1. 前端/调用方向调度服务发送 `POST /cook`，指定 `task_type`
@@ -318,14 +320,9 @@ Invoke-RestMethod -Uri "http://127.0.0.1:5050/cook" `
 ### 第二阶段-前端界面功能
 
   *   [x] 统一日志系统（OOP设计）
-  *   [x] 详细日志：`export/serve/log/detail/{uuid}.json`
-  *   [x] 用户宏观日志：`export/serve/log/users/{user_id}.json`
-  *   [x] 支持操作栈覆写与历史迁移
   *   [x] 完成step2/step3-发送房间信息给Hython服务，生成链接通路
   *   [x] 前端用户管理
-  *   [x] Users输入框（支持随机生成）
-  *   [x] 每次启动生成新的user_time
-  *   [x] 请求自动附加user_id与request_time
+  *   [x] 完成step4-主题配置查询功能，支持弹框展示主题信息
 
 ### 第三阶段-多人协作工具
 
@@ -352,8 +349,8 @@ Invoke-RestMethod -Uri "http://127.0.0.1:5050/cook" `
   - `BaseTaskProcessor`：抽象基类，定义处理器接口
   - `RoomGenerationProcessor`：房间生成处理器（hython + JSON转PNG）
   - `RoomRegenProcessor`：房间信息更新处理器（PNG→JSON + hython pressButton）
-  - `TextureExportProcessor`：纹理导出处理器（待实现）
-  - `LightingBakeProcessor`：光照烘焙处理器（待实现）
+  - `ListThemesProcessor`：主题配置查询处理器（读取配置文件，返回主题信息）
+
 - **优势**：
   - 可扩展性：新增功能只需实现新的处理器类
   - 职责分离：每种任务类型独立维护
