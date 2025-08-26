@@ -23,6 +23,15 @@
     <div class="settings-item">
       <button class="button pcg-step3-btn">Step3 - 房间位置更新</button>
     </div>
+    <div class="settings-item">
+      <hr class="pcg-divider" />
+    </div>
+    <div class="settings-item">
+      <span style="display:inline-flex; align-items:center; gap:8px; vertical-align:middle;">
+        <label>Step4 - 绘制主题区域</label>
+        <button class="button pcg-step4-help-btn" title="查看主题配置">颜色配置</button>
+      </span>
+    </div>
   </div>
   <script type="text/template" id="pcg-step1-request-template">
   {
@@ -52,6 +61,14 @@
     },
     "hython": "C:\\Program Files\\Side Effects Software\\Houdini 20.5.487\\bin\\hython.exe",
     "timeout_sec": 300
+  }
+  </script>
+  <script type="text/template" id="pcg-step4-request-template">
+  {
+    "task_type": "list_themes",
+    "hip": "I:\\Ugit_Proj\\moco_pcg\\dev_oa_ui.hip",
+    "uuid": "{{uuid}}",
+    "timeout_sec": 30
   }
   </script>
 </script>

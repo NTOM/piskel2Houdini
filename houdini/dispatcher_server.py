@@ -164,6 +164,9 @@ def cook():
 				process_name = payload.get("task_type", DEFAULT_TASK_TYPE)
 				hip = payload.get("hip")
 				uuid_val = str(payload.get("uuid") or "").strip()
+				# 特例：list_themes 仅查询，不写任何日志
+				if process_name == "list_themes":
+					return jsonify(result)
 				if user_id and request_time and hip and uuid_val:
 					log_system.append_or_replace_user_stack(
 						hip_path=hip,

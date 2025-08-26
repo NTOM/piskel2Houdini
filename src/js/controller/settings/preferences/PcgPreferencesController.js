@@ -72,6 +72,12 @@
     if (step3Btn) {
       this.addEventListener(step3Btn, 'click', this.onClickStep3_.bind(this));
     }
+
+    // 绑定 Step4 帮助按钮（列出Theme信息）
+    var step4HelpBtn = document.querySelector('.pcg-step4-help-btn');
+    if (step4HelpBtn) {
+      this.addEventListener(step4HelpBtn, 'click', this.onClickStep4Help_.bind(this));
+    }
   };
 
   ns.PcgPreferencesController.prototype.onSeedInput_ = function (evt) {
@@ -320,6 +326,282 @@
     } catch (e) {
       console.error('[PCG] Step3_RoomRegen invalid template JSON:', e);
       this.hideProcessing_();
+    }
+  };
+
+  /**
+   * Step4：仅请求后端读取主题配置并以文本返回，前端弹框展示。
+   */
+  ns.PcgPreferencesController.prototype.onClickStep4Help_ = function () {
+    var template = pskl.utils.Template.get('pcg-step4-request-template');
+    if (!template) { return; }
+
+    var uuid = this.generateUUID_();
+    var requestJsonString = pskl.utils.Template.replace(template, {
+      'uuid': uuid
+    });
+
+    try {
+      var payload = JSON.parse(requestJsonString);
+      // 不参与统一日志系统：不添加 user_id/request_time
+      var url = 'http://127.0.0.1:5050/cook';
+
+      var self = this;
+      this.showProcessing_('Loading themes...');
+      pskl.utils.Xhr.xhr_(url, 'POST', function (xhr) {
+        var text = xhr.responseText || '{}';
+        var msg = '';
+        try {
+          var resp = JSON.parse(text);
+          if (resp && resp.ok && resp.themes && resp.themes.length) {
+            self.hideProcessing_();
+            self.showThemesDialog_(resp.themes);
+            return;
+          }
+          if (resp && resp.ok && resp.lines && resp.lines.length) {
+            msg = resp.lines.join('\n');
+          } else if (resp && resp.ok && resp.text) {
+            msg = String(resp.text);
+          } else {
+            msg = text;
+          }
+        } catch (e) {
+          msg = text;
+        }
+        self.hideProcessing_();
+        self.showAlertDialog_('可用主题', msg);
+      }, function (err, xhr) {
+        self.hideProcessing_();
+        var msg = (xhr && xhr.responseText) ? xhr.responseText : String(err || 'request error');
+        self.showAlertDialog_('获取主题失败', msg);
+      }).send(JSON.stringify(payload));
+    } catch (e) {
+      this.hideProcessing_();
+      this.showAlertDialog_('请求构建失败', String(e));
+    }
+  };
+
+  /** 简易提示框（复用DOM，避免引入额外库） */
+  ns.PcgPreferencesController.prototype.showAlertDialog_ = function (title, message) {
+    try {
+      var wrap = document.createElement('div');
+      wrap.style.position = 'fixed';
+      wrap.style.left = '0';
+      wrap.style.top = '0';
+      wrap.style.right = '0';
+      wrap.style.bottom = '0';
+      wrap.style.background = 'rgba(0,0,0,0.45)';
+      wrap.style.zIndex = '10001';
+      wrap.style.display = 'flex';
+      wrap.style.alignItems = 'center';
+      wrap.style.justifyContent = 'center';
+
+      var panel = document.createElement('div');
+      panel.style.background = '#222';
+      panel.style.color = '#fff';
+      panel.style.minWidth = '360px';
+      panel.style.maxWidth = '720px';
+      panel.style.maxHeight = '70vh';
+      panel.style.overflow = 'auto';
+      panel.style.borderRadius = '8px';
+      panel.style.boxShadow = '0 6px 24px rgba(0,0,0,0.35)';
+      panel.style.padding = '16px 16px 12px 16px';
+
+      var h = document.createElement('div');
+      h.style.fontSize = '16px';
+      h.style.fontWeight = 'bold';
+      h.style.marginBottom = '10px';
+      h.textContent = title || 'Info';
+
+      var pre = document.createElement('pre');
+      pre.style.whiteSpace = 'pre-wrap';
+      pre.style.wordBreak = 'break-word';
+      pre.style.margin = '0 0 12px 0';
+      pre.textContent = message || '';
+
+      var btn = document.createElement('button');
+      btn.className = 'button';
+      btn.textContent = 'OK';
+      btn.style.minWidth = '80px';
+      btn.onclick = function () {
+        if (wrap && wrap.parentNode) { wrap.parentNode.removeChild(wrap); }
+      };
+
+      panel.appendChild(h);
+      panel.appendChild(pre);
+      panel.appendChild(btn);
+      wrap.appendChild(panel);
+      document.body.appendChild(wrap);
+    } catch (e) {
+      alert(message || '');
+    }
+  };
+
+  /** 主题列表对话框：表格 + 一键应用主色 */
+  ns.PcgPreferencesController.prototype.showThemesDialog_ = function (themes) {
+    try {
+      var wrap = document.createElement('div');
+      wrap.style.position = 'fixed';
+      wrap.style.left = '0';
+      wrap.style.top = '0';
+      wrap.style.right = '0';
+      wrap.style.bottom = '0';
+      wrap.style.background = 'rgba(0,0,0,0.45)';
+      wrap.style.zIndex = '10001';
+      wrap.style.display = 'flex';
+      wrap.style.alignItems = 'center';
+      wrap.style.justifyContent = 'center';
+
+      var panel = document.createElement('div');
+      panel.style.background = '#222';
+      panel.style.color = '#fff';
+      panel.style.minWidth = '520px';
+      panel.style.maxWidth = '900px';
+      panel.style.maxHeight = '70vh';
+      panel.style.overflow = 'auto';
+      panel.style.borderRadius = '8px';
+      panel.style.boxShadow = '0 6px 24px rgba(0,0,0,0.35)';
+      panel.style.padding = '16px 16px 12px 16px';
+
+      var h = document.createElement('div');
+      h.style.fontSize = '16px';
+      h.style.fontWeight = 'bold';
+      h.style.marginBottom = '10px';
+      h.textContent = '可用主题';
+
+      var table = document.createElement('table');
+      table.style.width = '100%';
+      table.style.borderCollapse = 'collapse';
+      table.style.marginBottom = '12px';
+
+      var thead = document.createElement('thead');
+      var trh = document.createElement('tr');
+      var th1 = document.createElement('th');
+      th1.textContent = 'Theme';
+      th1.style.textAlign = 'left';
+      th1.style.borderBottom = '1px solid #444';
+      th1.style.padding = '6px 4px';
+      var th2 = document.createElement('th');
+      th2.textContent = 'Color';
+      th2.style.textAlign = 'left';
+      th2.style.borderBottom = '1px solid #444';
+      th2.style.padding = '6px 4px';
+      var th3 = document.createElement('th');
+      th3.textContent = 'Desc';
+      th3.style.textAlign = 'left';
+      th3.style.borderBottom = '1px solid #444';
+      th3.style.padding = '6px 4px';
+      var th4 = document.createElement('th');
+      th4.textContent = '操作';
+      th4.style.textAlign = 'left';
+      th4.style.borderBottom = '1px solid #444';
+      th4.style.padding = '6px 4px';
+      trh.appendChild(th1);
+      trh.appendChild(th2);
+      trh.appendChild(th3);
+      trh.appendChild(th4);
+      thead.appendChild(trh);
+      table.appendChild(thead);
+
+      var tbody = document.createElement('tbody');
+
+      var normalizeHex = function (c) {
+        if (!c) { return ''; }
+        c = String(c).trim();
+        if (!c) { return ''; }
+        if (c[0] !== '#') { c = '#' + c; }
+        return c.toLowerCase();
+      };
+
+      themes.forEach(function (item) {
+        var name = (item && (item.name || item.theme)) || '';
+        var color = normalizeHex(item && (item.color || item.hex || item.colour));
+        var desc = (item && (item.description || item.desc || item.note)) || '';
+
+        var tr = document.createElement('tr');
+        var td1 = document.createElement('td');
+        td1.textContent = name;
+        td1.style.padding = '6px 4px';
+        td1.style.borderBottom = '1px solid #333';
+        var td2 = document.createElement('td');
+        td2.style.padding = '6px 4px';
+        td2.style.borderBottom = '1px solid #333';
+        var swatch = document.createElement('span');
+        swatch.textContent = color || '-';
+        swatch.style.display = 'inline-flex';
+        swatch.style.alignItems = 'center';
+        swatch.style.gap = '8px';
+        var box = document.createElement('span');
+        box.style.display = 'inline-block';
+        box.style.width = '14px';
+        box.style.height = '14px';
+        box.style.border = '1px solid #555';
+        box.style.background = color || 'transparent';
+        swatch.prepend(box);
+        td2.appendChild(swatch);
+
+        var td3 = document.createElement('td');
+        td3.textContent = desc;
+        td3.style.padding = '6px 4px';
+        td3.style.borderBottom = '1px solid #333';
+        var td4 = document.createElement('td');
+        td4.style.padding = '6px 4px';
+        td4.style.borderBottom = '1px solid #333';
+        var btn = document.createElement('button');
+        btn.className = 'button';
+        btn.textContent = '应用主色';
+        btn.disabled = !color;
+        btn.onclick = function () {
+          try {
+            if (!color) { return; }
+            if (pskl && pskl.app && pskl.app.paletteController &&
+                pskl.app.paletteController.setPrimaryColor_) {
+              pskl.app.paletteController.setPrimaryColor_(color);
+            } else {
+              // 兜底：仅发布事件（可能不更新UI选择器）
+              $.publish(Events.PRIMARY_COLOR_SELECTED, [color]);
+            }
+          } catch (e) {}
+        };
+        td4.appendChild(btn);
+
+        tr.appendChild(td1);
+        tr.appendChild(td2);
+        tr.appendChild(td3);
+        tr.appendChild(td4);
+        tbody.appendChild(tr);
+      });
+
+      table.appendChild(tbody);
+
+      var footer = document.createElement('div');
+      footer.style.textAlign = 'right';
+      var closeBtn = document.createElement('button');
+      closeBtn.className = 'button';
+      closeBtn.textContent = '关闭';
+      closeBtn.onclick = function () {
+        if (wrap && wrap.parentNode) { wrap.parentNode.removeChild(wrap); }
+      };
+      footer.appendChild(closeBtn);
+
+      panel.appendChild(h);
+      panel.appendChild(table);
+      panel.appendChild(footer);
+      wrap.appendChild(panel);
+      document.body.appendChild(wrap);
+    } catch (e) {
+      // fallback 到文本提示
+      var lines = [];
+      try {
+        for (var i = 0; i < themes.length; i++) {
+          var t = themes[i] || {};
+          var name = t.name || t.theme || '';
+          var color = t.color || t.hex || t.colour || '';
+          var desc = t.description || t.desc || t.note || '';
+          lines.push('Theme: ' + name + '    Color: ' + color + '    Desc: ' + desc);
+        }
+      } catch (e2) {}
+      this.showAlertDialog_('可用主题', lines.join('\n'));
     }
   };
 

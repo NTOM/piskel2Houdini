@@ -450,10 +450,105 @@ class RoomRegenProcessor(BaseTaskProcessor):
             return {"ok": False, "error": str(e)}
 
 
+class ListThemesProcessor(BaseTaskProcessor):
+    """读取 hip 同目录 export/serve/config/<hip_name>.json 并返回主题信息。
+
+    返回字段：
+    - ok: bool
+    - themes: List[Dict] 原始主题对象列表（如存在）
+    - lines: List[str] 便于前端直接展示的文本行
+    - text: str 将 lines 用\n拼接后的整段文本
+    """
+
+    def can_handle(self, task_type: str) -> bool:
+        return task_type == "list_themes"
+
+    def get_required_fields(self) -> List[str]:
+        # 仅需要 hip 与 uuid（保持与默认一致，uuid 便于通用请求模板）
+        return ["hip", "uuid"]
+
+    def execute(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        try:
+            hip = str(payload.get("hip") or "").strip()
+            if not hip:
+                return {"ok": False, "error": "缺少必需字段: hip"}
+
+            hip_dir = os.path.dirname(os.path.abspath(hip))
+            hip_base = os.path.splitext(os.path.basename(hip))[0]
+            cfg_path = os.path.join(hip_dir, "export", "serve", "config", f"{hip_base}.json")
+
+            if not os.path.isfile(cfg_path):
+                return {"ok": False, "error": f"未找到主题配置: {cfg_path}"}
+
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            # 兼容可能的结构：
+            # 1) data["themes"] 为数组
+            # 2) data 本身为数组
+            # 3) data 为字典映射 { "name": { ... } }
+            themes = None
+            if isinstance(data, dict) and "themes" in data:
+                themes = data.get("themes")
+            elif isinstance(data, list):
+                themes = data
+            elif isinstance(data, dict):
+                # 进一步尝试常见键位
+                for key in ("items", "theme_list", "data"):
+                    if key in data:
+                        themes = data[key]
+                        break
+                # 若仍未命中，尝试将字典映射转换为数组
+                if themes is None:
+                    # 判断 value 是否像主题对象（dict 且包含常见字段）
+                    looks_like_mapping = all(
+                        isinstance(v, dict) for v in data.values()
+                    ) and any(
+                        any(k in ("description", "color", "hex", "chunk_tag", "cluster_id") for k in (v.keys() if isinstance(v, dict) else []))
+                        for v in data.values()
+                    )
+                    if looks_like_mapping:
+                        converted = []
+                        for name_key, theme_val in data.items():
+                            if isinstance(theme_val, dict):
+                                item = {"name": name_key}
+                                item.update(theme_val)
+                                converted.append(item)
+                        themes = converted
+
+            if not isinstance(themes, list):
+                themes = []
+
+            lines: List[str] = []
+            for item in themes:
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get("name") or item.get("theme") or "").strip() or "(未命名)"
+                color = str(item.get("color") or item.get("hex") or item.get("colour") or "").strip()
+                desc = str(item.get("description") or item.get("desc") or item.get("note") or "").strip()
+                if color and not color.startswith('#'):
+                    # 规范化为 #RRGGBB（若已是 # 开头则保持）
+                    color = '#' + color
+                line = f"Theme: {name}    Color: {color or '-'}    Desc: {desc or '-'}"
+                lines.append(line)
+
+            text = "\n".join(lines) if lines else "(无可用主题)"
+            return {
+                "ok": True,
+                "themes": themes,
+                "lines": lines,
+                "text": text,
+                "config_path": cfg_path
+            }
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+
 # 任务处理器注册表
 TASK_PROCESSORS = {
     "room_generation": RoomGenerationProcessor(),
     "room_regen": RoomRegenProcessor(),
+    "list_themes": ListThemesProcessor(),
 }
 
 # 默认任务类型
