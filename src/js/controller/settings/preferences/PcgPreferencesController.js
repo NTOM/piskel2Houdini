@@ -16,9 +16,12 @@
       currentUsers = this.generateRandomUsers_();
       pskl.UserSettings.set(pskl.UserSettings.PCG_USERS, currentUsers);
     }
-    // 初始化 user_time（紧凑型，北京时间，每次刷新都重新生成，确保每次刷新都是新会话）
-    var userTimeCompact = this.generateCompactBeijingTime_();
-    pskl.UserSettings.set(pskl.UserSettings.PCG_USER_TIME_COMPACT, userTimeCompact);
+    // 初始化 user_time（紧凑型，北京时间，只在第一次使用时生成，确保同一会话使用相同时间戳）
+    var userTimeCompact = pskl.UserSettings.get(pskl.UserSettings.PCG_USER_TIME_COMPACT);
+    if (!userTimeCompact) {
+      userTimeCompact = this.generateCompactBeijingTime_();
+      pskl.UserSettings.set(pskl.UserSettings.PCG_USER_TIME_COMPACT, userTimeCompact);
+    }
     if (usersInput) {
       usersInput.value = currentUsers;
       this.addEventListener(usersInput, 'change', function (evt) {
@@ -119,8 +122,12 @@
     // 5) 组装 user_id 与 request_time（北京时间 ISO8601）
     var users = pskl.UserSettings.get(pskl.UserSettings.PCG_USERS) || this.generateRandomUsers_();
     var requestTime = this.generateBeijingIsoTime_();
-    var userTimeCompact = pskl.UserSettings.get(pskl.UserSettings.PCG_USER_TIME_COMPACT) ||
-      this.generateCompactBeijingTime_();
+    var userTimeCompact = pskl.UserSettings.get(pskl.UserSettings.PCG_USER_TIME_COMPACT);
+    // 确保 userTimeCompact 存在，如果不存在说明是第一次使用，需要生成
+    if (!userTimeCompact) {
+      userTimeCompact = this.generateCompactBeijingTime_();
+      pskl.UserSettings.set(pskl.UserSettings.PCG_USER_TIME_COMPACT, userTimeCompact);
+    }
     var userId = users + '_' + userTimeCompact;
 
     // 6) 发送到本地调度服务（默认 5050 端口）
@@ -265,8 +272,12 @@
       var payload = JSON.parse(requestJsonString);
       var users = pskl.UserSettings.get(pskl.UserSettings.PCG_USERS) || this.generateRandomUsers_();
       var requestTime = this.generateBeijingIsoTime_();
-      var userTimeCompact = pskl.UserSettings.get(pskl.UserSettings.PCG_USER_TIME_COMPACT) ||
-        this.generateCompactBeijingTime_();
+      var userTimeCompact = pskl.UserSettings.get(pskl.UserSettings.PCG_USER_TIME_COMPACT);
+      // 确保 userTimeCompact 存在，如果不存在说明是第一次使用，需要生成
+      if (!userTimeCompact) {
+        userTimeCompact = this.generateCompactBeijingTime_();
+        pskl.UserSettings.set(pskl.UserSettings.PCG_USER_TIME_COMPACT, userTimeCompact);
+      }
       payload.user_id = users + '_' + userTimeCompact;
       payload.request_time = requestTime;
       var url = 'http://127.0.0.1:5050/cook';
