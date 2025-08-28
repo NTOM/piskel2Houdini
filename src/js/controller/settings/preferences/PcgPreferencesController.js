@@ -78,6 +78,12 @@
     if (step4HelpBtn) {
       this.addEventListener(step4HelpBtn, 'click', this.onClickStep4Help_.bind(this));
     }
+
+    // 绑定 Step5 按钮（道路关系生成）
+    var step5Btn = document.querySelector('.pcg-step5-btn');
+    if (step5Btn) {
+      this.addEventListener(step5Btn, 'click', this.onClickStep5_.bind(this));
+    }
   };
 
   ns.PcgPreferencesController.prototype.onSeedInput_ = function (evt) {
@@ -210,7 +216,8 @@
             console.error('[PCG] wrap blob to File failed:', e);
           }
         } else {
-          console.error('[PCG] fetch png failed:', xhr.status, xhr.responseText);
+          // responseType 为 blob 时，responseText 不可访问
+          console.error('[PCG] fetch png failed:', xhr.status);
         }
         if (doneCb) { doneCb(); }
       };
@@ -717,6 +724,123 @@
     var h = pad(bj.getHours());
     var mm = pad(bj.getMinutes());
     return '' + y + m + d2 + h + mm;
+  };
+
+  /**
+   * Step5：道路关系生成
+   */
+  ns.PcgPreferencesController.prototype.onClickStep5_ = function () {
+    console.log('[PCG] Step5 - 道路关系生成 点击事件触发');
+
+    // 1) 读取模板
+    var template = pskl.utils.Template.get('pcg-step5-request-template');
+    if (!template) {
+      console.error('[PCG] Step5 template not found');
+      return;
+    }
+
+    // 2) 生成UUID
+    var uuid = this.generateUUID_();
+
+    // 3) 替换模板中的占位符
+    var requestJsonString = pskl.utils.Template.replace(template, {
+      'uuid': uuid
+    });
+
+    // 4) 组装 user_id 与 request_time（北京时间 ISO8601）
+    var users = pskl.UserSettings.get(pskl.UserSettings.PCG_USERS) || this.generateRandomUsers_();
+    var requestTime = this.generateBeijingIsoTime_();
+    var userTimeCompact = null;
+    try { userTimeCompact = window.sessionStorage.getItem('PCG_USER_TIME_COMPACT'); } catch (e) {}
+    // 确保 userTimeCompact 存在（极端情况下会话中缺失时重新生成）
+    if (!userTimeCompact) {
+      userTimeCompact = this.generateCompactBeijingTime_();
+      try { window.sessionStorage.setItem('PCG_USER_TIME_COMPACT', userTimeCompact); } catch (e) {}
+    }
+    var userId = users + '_' + userTimeCompact;
+
+    // 5) 先解析payload
+    var payload;
+    try {
+      payload = JSON.parse(requestJsonString);
+      payload.user_id = userId;
+      payload.request_time = requestTime;
+    } catch (e) {
+      console.error('[PCG] Step5 payload parse error:', e);
+      this.hideProcessing_();
+      return;
+    }
+
+    var self = this;
+    var hipPath = payload.hip;
+
+    // 6) 先导出当前页面图片为PNG Blob
+    this.exportSpritesheetAsBlob_(function (blob) {
+      if (!blob) {
+        console.error('[PCG] Step5 export sprite failed: empty blob');
+        return;
+      }
+
+      var filename = uuid + '_start.png';
+
+      // 7) 先上传PNG到后端
+      self.uploadPngToServer_(blob, filename, hipPath, uuid, function (ok) {
+        if (!ok) {
+          console.error('[PCG] Step5 upload png failed');
+          self.hideProcessing_();
+          return;
+        }
+
+        // 8) 上传成功后，再发送/cook请求
+        self.executeStep5Request_(payload, uuid, hipPath);
+      });
+    });
+  };
+
+  /**
+   * 执行Step5的请求逻辑
+   */
+  ns.PcgPreferencesController.prototype.executeStep5Request_ = function (payload, uuid, hipPath) {
+    var url = 'http://127.0.0.1:5050/cook';
+    var self = this;
+
+    // 显示 Processing 遮罩
+    this.showProcessing_('生成道路关系...');
+
+    pskl.utils.Xhr.xhr_(url, 'POST', function (xhr) {
+      // 成功回调：打印结果
+      var text = xhr.responseText || '{}';
+      console.log('[PCG] Step5_RoadGen success:', text);
+
+      // 解析响应，尝试拉取PNG
+      try {
+        var resp = JSON.parse(text);
+        var respUuid = (resp && resp.post && resp.post.json && resp.post.json.uuid) ||
+          payload.uuid || uuid;
+        if (resp && resp.post && resp.post.ok && respUuid && hipPath) {
+          // step5生成的是 <uuid>_end.png；若后端已返回 *_end 则不再重复追加
+          var fetchUuid = String(respUuid || '');
+          if (!/_end$/i.test(fetchUuid)) {
+            fetchUuid = fetchUuid + '_end';
+          }
+          var pngUrl = 'http://127.0.0.1:5050/result/png?hip=' +
+            encodeURIComponent(hipPath) +
+            '&uuid=' + encodeURIComponent(fetchUuid);
+          self.fetchAndImportPng_(pngUrl, function () {
+            self.hideProcessing_();
+          });
+        } else {
+          // 没有有效的 post 结果，直接隐藏遮罩
+          self.hideProcessing_();
+        }
+      } catch (e) {
+        console.error('[PCG] Step5_RoadGen response parse error:', e);
+        self.hideProcessing_();
+      }
+    }, function (err, xhr) {
+      console.error('[PCG] Step5_RoadGen error:', err, xhr && xhr.responseText);
+      self.hideProcessing_();
+    }).send(JSON.stringify(payload));
   };
 
   ns.PcgPreferencesController.prototype.destroy = function () {

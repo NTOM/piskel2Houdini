@@ -198,3 +198,35 @@ class LogSystem:
         return upath
 
 
+
+    # ============ 读取用户宏观日志 ============
+    def read_user_log(self, hip_path: str, user_id: str) -> Dict[str, Any]:
+        """读取指定 hip 与 user_id 对应的用户日志内容。
+
+        返回包含 keys: user_id/stack/history/updated_at 的字典；
+        若不存在则返回空结构（含空 stack）。
+        """
+        if not hip_path or not user_id:
+            return {"user_id": user_id or "", "stack": [], "history": [], "updated_at": ""}
+        upath = self._user_log_path(hip_path, user_id)
+        if not upath:
+            return {"user_id": user_id, "stack": [], "history": [], "updated_at": ""}
+        return self._load_user_state(upath, user_id, init_time_iso="")
+
+    def get_stack_uuid(self, hip_path: str, user_id: str, step_back_count: int = 1) -> Optional[str]:
+        """从用户日志的 stack 中获取倒数第 step_back_count 个条目的 uuid。
+
+        例如 step_back_count=1 返回 stack[-1].uuid（上一步）。
+        """
+        try:
+            data = self.read_user_log(hip_path, user_id)
+            stack = data.get("stack") or []
+            if not isinstance(stack, list) or step_back_count < 1 or len(stack) < step_back_count:
+                return None
+            item = stack[-step_back_count]
+            if isinstance(item, dict):
+                val = item.get("uuid")
+                return str(val) if val is not None else None
+            return None
+        except Exception:
+            return None

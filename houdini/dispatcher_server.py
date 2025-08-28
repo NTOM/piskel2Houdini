@@ -4,6 +4,9 @@
 
 支持多种任务类型：
 - room_generation: 房间生成（hython + JSON转PNG）
+- room_regen: 房间重新生成（hython + press按钮）
+- list_themes: 列出主题配置（仅查询）
+- road_generation: 道路关系生成（hython + 多节点press按钮）
 
 运行（系统 Python，需安装 Flask）：pip install flask
   python houdini/dispatcher_server.py --host 0.0.0.0 --port 5050
@@ -22,6 +25,10 @@
   "post_timeout_sec": 10,                                                           # 可选，后置处理超时
   "post_wait_sec": 5                                                                # 可选，后置处理等待时间
 }
+
+特殊说明：
+- road_generation 任务支持 cook_node 为数组，将按顺序依次执行
+- road_generation 任务需要 user_id 来从日志中获取缓存UUID
 """
 import os
 import sys
@@ -113,7 +120,15 @@ def upload_png():
         # 目标路径与安全校验
         out_dir = os.path.join(hip_dir, 'export', 'serve')
         os.makedirs(out_dir, exist_ok=True)
-        out_path = os.path.join(out_dir, f'{uuid_val}.png')
+        # 若上传的文件名形如 *_start.png，则按 <uuid>_start.png 保存；否则仍保存为 <uuid>.png
+        save_name = f'{uuid_val}.png'
+        try:
+            lower_name = (f.filename or '').lower()
+            if lower_name.endswith('_start.png'):
+                save_name = f'{uuid_val}_start.png'
+        except Exception:
+            pass
+        out_path = os.path.join(out_dir, save_name)
         base_real = os.path.realpath(hip_dir)
         out_real = os.path.realpath(out_path)
         if not out_real.startswith(base_real):
@@ -131,6 +146,9 @@ def cook():
 	
 	支持的任务类型：
 	- room_generation: 房间生成（hython + JSON转PNG）
+	- room_regen: 房间重新生成（hython + press按钮）
+	- list_themes: 列出主题配置（仅查询）
+	- road_generation: 道路关系生成（hython + 多节点press按钮）
 	"""
 	try:
 		# 读取并校验请求体

@@ -54,58 +54,60 @@ def main():
     try:
         job = read_job(args.job)
         hip = job['hip']
-        cook_node_path = job['cook_node']
-        parm_node_path = job.get('parm_node') or cook_node_path
+        cook_node_paths = job['cook_node']  # 现在可能是数组或字符串
+        parm_node_path = job.get('parm_node') or (cook_node_paths[0] if isinstance(cook_node_paths, list) else cook_node_paths)
         uuid = job.get('uuid')
         parms = job.get('parms', {})
 
         hou.hipFile.load(hip)
         parm_node = hou.node(parm_node_path)
-        cook_node = hou.node(cook_node_path)
-        if cook_node is None:
-            raise RuntimeError('cook_node not found: ' + cook_node_path)
         if parm_node is None:
             raise RuntimeError('parm_node not found: ' + parm_node_path)
 
         # 先设置参数
         applied = set_parms(parm_node, parms)
 
-        # 按下 execute 按钮
-        btn = cook_node.parm('execute')
-        if btn is None:
-            raise RuntimeError('execute button parm not found on cook_node')
-        
-        # 记录按钮按下前的状态
-        prev_cook_state = cook_node.parm('cook').eval() if cook_node.parm('cook') else None
-        
-        # 按下按钮
-        btn.pressButton()
-        
-        # 等待一下让 cook 完成
-        time.sleep(0.5)
-        
-        # 检查 cook 状态变化或是否有错误
-        current_cook_state = cook_node.parm('cook').eval() if cook_node.parm('cook') else None
-        has_error = cook_node.errors() or cook_node.warnings()
-        
-        # 判断是否成功：如果没有错误，且按钮按下没有抛出异常，就认为成功
-        ok = True  # 默认认为成功，除非有明确的错误
-        
-        # 如果有错误，标记为失败
-        if has_error:
-            ok = False
+        # 处理cook节点（支持单个或多个）
+        cook_results = []
+        if isinstance(cook_node_paths, list):
+            # 多个cook节点，按顺序执行
+            for i, cook_node_path in enumerate(cook_node_paths):
+                try:
+                    cook_result = execute_cook_node(cook_node_path, i, start)
+                    cook_results.append(cook_result)
+                    
+                    # 如果某个节点失败，停止执行
+                    if not cook_result['ok']:
+                        break
+                        
+                except Exception as e:
+                    cook_results.append({
+                        'ok': False,
+                        'cook_node': cook_node_path,
+                        'index': i,
+                        'error': str(e)
+                    })
+                    break
+        else:
+            # 单个cook节点（向后兼容）
+            cook_result = execute_cook_node(cook_node_paths, 0, start)
+            cook_results.append(cook_result)
 
+        # 判断整体是否成功
+        overall_ok = all(result['ok'] for result in cook_results)
+        
         elapsed = int((time.time() - start) * 1000)
         result = {
-            'ok': ok,
+            'ok': overall_ok,
             'uuid': uuid,
             'hip': hip,
-            'cook_node': cook_node_path,
+            'cook_nodes': cook_node_paths if isinstance(cook_node_paths, list) else [cook_node_paths],
             'parm_node': parm_node_path,
             'elapsed_ms': elapsed,
             'parms': applied,
-            'cook_state_changed': prev_cook_state != current_cook_state if prev_cook_state is not None else None,
-            'has_errors': bool(has_error),
+            'cook_results': cook_results,
+            'total_cook_nodes': len(cook_results),
+            'successful_cook_nodes': sum(1 for r in cook_results if r['ok'])
         }
         write_json(result, args.out)
     except Exception as e:
@@ -114,6 +116,48 @@ def main():
             'error': str(e),
         }
         write_json(err, args.out)
+
+
+def execute_cook_node(cook_node_path, index, start_time):
+    """执行单个cook节点的逻辑"""
+    cook_node = hou.node(cook_node_path)
+    if cook_node is None:
+        raise RuntimeError('cook_node not found: ' + cook_node_path)
+
+    # 按下 execute 按钮
+    btn = cook_node.parm('execute')
+    if btn is None:
+        raise RuntimeError('execute button parm not found on cook_node: ' + cook_node_path)
+    
+    # 记录按钮按下前的状态
+    prev_cook_state = cook_node.parm('cook').eval() if cook_node.parm('cook') else None
+    
+    # 按下按钮
+    btn.pressButton()
+    
+    # 等待一下让 cook 完成
+    time.sleep(0.5)
+    
+    # 检查 cook 状态变化或是否有错误
+    current_cook_state = cook_node.parm('cook').eval() if cook_node.parm('cook') else None
+    has_error = cook_node.errors() or cook_node.warnings()
+    
+    # 判断是否成功：如果没有错误，且按钮按下没有抛出异常，就认为成功
+    ok = True  # 默认认为成功，除非有明确的错误
+    
+    # 如果有错误，标记为失败
+    if has_error:
+        ok = False
+
+    elapsed = int((time.time() - start_time) * 1000)
+    return {
+        'ok': ok,
+        'cook_node': cook_node_path,
+        'index': index,
+        'elapsed_ms': elapsed,
+        'cook_state_changed': prev_cook_state != current_cook_state if prev_cook_state is not None else None,
+        'has_errors': bool(has_error),
+    }
 
 
 if __name__ == '__main__':

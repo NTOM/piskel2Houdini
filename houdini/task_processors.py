@@ -544,11 +544,286 @@ class ListThemesProcessor(BaseTaskProcessor):
             return {"ok": False, "error": str(e)}
 
 
+class RoadGenerationProcessor(BaseTaskProcessor):
+    """道路关系生成任务处理器：基于缓存UUID执行多个cook节点。"""
+    
+    def can_handle(self, task_type: str) -> bool:
+        return task_type == "road_generation"
+    
+    def get_required_fields(self) -> List[str]:
+        return ["hip", "cook_node", "uuid"]
+    
+    def execute(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        执行道路关系生成任务：
+        1. 根据step_back_count从user_log中获取缓存UUID
+        2. 重构参数，将step_back_count替换为load_cache_uuid
+        3. 使用hython_cook_press.py依次执行多个cook节点
+        """
+        try:
+            start_time = time.time()
+            
+            # 提取和验证参数
+            hip = payload["hip"]
+            cook_nodes = payload["cook_node"]  # 现在是数组
+            parm_node = payload.get("parm_node", cook_nodes[0] if isinstance(cook_nodes, list) else cook_nodes)
+            parms = self.normalize_parms(payload.get("parms", {}))
+            uuid = self.extract_uuid(payload, parms)
+            hython_path = payload.get("hython", self.resolve_hython_path(payload))
+            timeout_sec = payload.get("timeout_sec", 300)
+            
+            # 验证cook_nodes是数组
+            if not isinstance(cook_nodes, list):
+                return {"ok": False, "error": "cook_node必须是数组格式"}
+            
+            # 从参数中获取step_back_count
+            step_back_count = int(parms.get("step_back_count", 1))
+            if step_back_count < 1:
+                return {"ok": False, "error": "step_back_count必须大于等于1"}
+            
+            # 从user_log中获取缓存UUID
+            user_id = payload.get("user_id")
+            if not user_id:
+                return {"ok": False, "error": "缺少user_id，无法获取缓存"}
+            
+            try:
+                # 读取用户日志，获取stack（从所属 hip 的 users 日志中读取）
+                user_log_data = log_system.read_user_log(hip, user_id)
+                if not user_log_data or "stack" not in user_log_data:
+                    return {"ok": False, "error": "无法读取用户日志或stack为空"}
+                
+                stack = user_log_data["stack"]
+                if not isinstance(stack, list) or len(stack) < step_back_count:
+                    return {"ok": False, "error": f"stack长度不足，无法回退{step_back_count}步"}
+                
+                # 计算目标索引：stack[-(step_back_count)]
+                target_index = -(step_back_count)
+                target_stack_item = stack[target_index]
+                load_cache_uuid = target_stack_item.get("uuid")
+                
+                if not load_cache_uuid:
+                    return {"ok": False, "error": f"目标步骤的UUID为空: {target_stack_item}"}
+                
+                # 记录参数重构信息
+                log_data = {
+                    "uuid": uuid,
+                    "task_type": "road_generation",
+                    "timestamp": start_time,
+                    "step_back_count": step_back_count,
+                    "original_parms": parms,
+                    "load_cache_uuid": load_cache_uuid,
+                    "target_stack_item": target_stack_item,
+                    "request_raw": payload
+                }
+                
+            except Exception as e:
+                return {"ok": False, "error": f"读取用户日志失败: {str(e)}"}
+            
+            # 重构参数：将step_back_count替换为load_cache_uuid
+            new_parms = parms.copy()
+            new_parms["load_cache_uuid"] = load_cache_uuid
+            # 移除step_back_count，因为Houdini不需要这个参数
+            if "step_back_count" in new_parms:
+                del new_parms["step_back_count"]
+            
+            # 构建新的job数据
+            job_data = {
+                "hip": hip,
+                "cook_node": cook_nodes,  # 保持数组格式
+                "parm_node": parm_node,
+                "uuid": uuid,
+                "parms": new_parms
+            }
+            
+            # 创建临时文件
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8") as tf:
+                json.dump(job_data, tf, ensure_ascii=False, indent=2)
+                job_path = tf.name
+            
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8") as tf:
+                result_path = tf.name
+            
+            # 先执行 PNG→JSON 转换（前端已上传PNG）
+            png2json_script = os.path.join(os.path.dirname(__file__), 'png2json.py')
+            if os.path.isfile(png2json_script):
+                hip_dir = os.path.dirname(os.path.abspath(hip))
+                # Step5 规范：将 <uuid>_start.png 转为 <uuid>_start.json
+                png2json_cmd = ["python", png2json_script, "--hip", hip_dir, "--uuid", f"{uuid}_start"]
+                
+                try:
+                    png2json_res = self.run_subprocess(png2json_cmd, 60)
+                    png2json_stdout = png2json_res["stdout"]
+                    if png2json_stdout:
+                        try:
+                            png2json_info = json.loads(png2json_stdout)
+                            if not png2json_info.get("ok"):
+                                return {
+                                    "ok": False,
+                                    "error": f"PNG转JSON失败: {png2json_info.get('error', 'unknown error')}",
+                                    "png2json": png2json_info
+                                }
+                        except Exception:
+                            return {
+                                "ok": False,
+                                "error": "解析png2json输出失败",
+                                "png2json_stdout": png2json_stdout
+                            }
+                    else:
+                        return {
+                            "ok": False,
+                            "error": "png2json无输出"
+                        }
+                except Exception as e:
+                    return {
+                        "ok": False,
+                        "error": f"执行png2json失败: {str(e)}"
+                    }
+            else:
+                return {
+                    "ok": False,
+                    "error": f"找不到png2json脚本: {png2json_script}"
+                }
+
+            # 启动hython进程
+            worker = os.path.join(os.path.dirname(__file__), 'hython_cook_press.py')
+            if not os.path.isfile(worker):
+                return {"ok": False, "error": f"找不到工作脚本: {worker}"}
+            
+            child_env = os.environ.copy()
+            child_env["PYTHONIOENCODING"] = "utf-8"
+            hython_cmd = [hython_path, worker, "--job", job_path, "--out", result_path]
+            
+            try:
+                hython_res = self.run_subprocess(hython_cmd, timeout_sec, env=child_env)
+            finally:
+                try:
+                    os.remove(job_path)
+                except Exception:
+                    pass
+            
+            elapsed_ms = hython_res["elapsed_ms"]
+            stdout = hython_res["stdout"]
+            stderr = hython_res["stderr"]
+            
+            # 解析worker输出
+            worker_json: Optional[Dict[str, Any]] = None
+            if stdout:
+                try:
+                    worker_json = json.loads(stdout)
+                    worker_json = json.loads(stdout)
+                except Exception:
+                    worker_json = None
+            if worker_json is None and os.path.isfile(result_path):
+                try:
+                    with open(result_path, "r", encoding="utf-8") as rf:
+                        worker_json = json.load(rf)
+                except Exception:
+                    worker_json = None
+                finally:
+                    try:
+                        os.remove(result_path)
+                    except Exception:
+                        pass
+            
+            # 执行后置处理（JSON→PNG）
+            post_info = None
+            
+            if hython_res["returncode"] == 0 and worker_json and worker_json.get("ok") and uuid:
+                reader = os.path.join(os.path.dirname(__file__), 'json2jpg.py')
+                if os.path.isfile(reader):
+                    child_env2 = os.environ.copy()
+                    child_env2["PYTHONIOENCODING"] = "utf-8"
+                    cmd_reader = [
+                        sys.executable, reader,
+                        "--hip", hip,
+                        # Step5 规范：将 <uuid>_end.json 转为 <uuid>_end.png
+                        "--uuid", f"{uuid}_end",
+                        "--wait-sec", "5"
+                    ]
+                    try:
+                        post_res = self.run_subprocess(cmd_reader, 30, env=child_env2)
+                        stdout_post = post_res["stdout"]
+                        post_json = None
+                        if stdout_post:
+                            try:
+                                post_json = json.loads(stdout_post)
+                            except Exception:
+                                post_json = None
+                        post_info = {
+                            "returncode": post_res["returncode"],
+                            "stdout": "",
+                            "stderr": "",
+                            "json": post_json,
+                            "elapsed_ms_post": post_res["elapsed_ms"],
+                            "ok": bool(post_json and post_json.get("ok") and post_res["returncode"] == 0)
+                        }
+                    except subprocess.TimeoutExpired:
+                        post_info = {
+                            "returncode": None,
+                            "stdout": "",
+                            "stderr": "json2jpg 超时",
+                            "json": None,
+                            "elapsed_ms_post": 0,
+                            "ok": False
+                        }
+                    except Exception as _e:
+                        post_info = {
+                            "returncode": None,
+                            "stdout": "",
+                            "stderr": str(_e),
+                            "json": None,
+                            "elapsed_ms_post": 0,
+                            "ok": False
+                        }
+                else:
+                    post_info = {"ok": False, "error": f"找不到json2jpg脚本: {reader}"}
+            else:
+                post_info = {"ok": False, "note": "hython执行失败，跳过后置处理"}
+
+            # 记录完整日志
+            log_data.update({
+                "elapsed_ms": elapsed_ms,
+                "worker_stdout": stdout,
+                "worker_stderr": stderr,
+                "worker_json": worker_json,
+                "new_parms": new_parms,
+                "cook_nodes": cook_nodes,
+                "post": post_info
+            })
+            
+            log_system.write_detail_log(hip_path=hip, uuid_val=uuid, data=log_data)
+            
+            # 构建响应
+            if worker_json and worker_json.get("ok"):
+                resp = worker_json.copy()
+                resp["elapsed_ms_dispatch"] = elapsed_ms
+                resp["load_cache_uuid"] = load_cache_uuid
+                resp["step_back_count"] = step_back_count
+                resp["post"] = post_info
+                return resp
+            else:
+                return {
+                    "ok": False,
+                    "elapsed_ms_dispatch": elapsed_ms,
+                    "returncode": hython_res["returncode"],
+                    "stdout": stdout,
+                    "stderr": stderr,
+                    "worker_json": worker_json,
+                    "load_cache_uuid": load_cache_uuid,
+                    "step_back_count": step_back_count,
+                    "post": post_info
+                }
+                
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+
 # 任务处理器注册表
 TASK_PROCESSORS = {
     "room_generation": RoomGenerationProcessor(),
     "room_regen": RoomRegenProcessor(),
     "list_themes": ListThemesProcessor(),
+    "road_generation": RoadGenerationProcessor(),
 }
 
 # 默认任务类型
