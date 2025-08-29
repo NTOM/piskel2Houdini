@@ -138,6 +138,7 @@ graph LR
 *   `RoomGenerationProcessor`：房间生成处理器（hython + JSON→PNG）
 *   `RoomRegenProcessor`：房间信息更新处理器（PNG→JSON + hython pressButton）
 *   `ListThemesProcessor`：主题配置查询处理器（读取配置文件，返回主题信息）
+*   `RoadGenerationProcessor`：道路关系生成处理器（基于缓存UUID顺序执行多节点）
 
 **日志集成**：
 
@@ -226,11 +227,18 @@ graph LR
 }
 ```
 
+#### step5：道路关系生成（road_generation）专属参数
+
+- `cook_node`：数组（必填），多个需要顺序执行的 cook 节点路径
+- `parms.step_back_count`：整数（>=1，必填），从用户日志回溯第 N 次成功操作的缓存 `uuid`
+- 需提供 `user_id`、`request_time`，用于定位用户栈
+
 **支持的任务类型**：
 
 *   `room_generation`：房间生成任务（参数设置 + cook节点 + JSON→PNG）
 *   `room_regen`：房间信息更新任务（PNG→JSON + 参数设置 + pressButton）
 *   `list_themes`：主题配置查询任务（读取配置文件，返回主题信息）
+*   `road_generation`：道路关系生成任务（从用户日志回溯缓存UUID，顺序执行多个cook节点）
 
 ### 响应格式
 
@@ -278,13 +286,13 @@ graph LR
 
 ### 任务流程对比
 
-| 特性      | room\_generation | room\_regen                     | list\_themes                    |
-| ------- | ---------------- | ------------------------------- | ------------------------------- |
-| **输入**  | 参数设置             | 参数设置 + PNG文件上传                  | 仅需hip和uuid                    |
-| **处理**  | hython cook节点    | PNG→JSON转换 + hython pressButton | 读取配置文件，解析主题信息            |
-| **输出**  | JSON + PNG文件     | 仅执行结果（无文件输出）                    | 主题配置信息（JSON格式）              |
-| **文件流** | 无 → JSON → PNG   | PNG → JSON → 无                  | 无文件生成，仅信息查询                |
-| **用途**  | 生成初始房间布局         | 基于现有布局更新房间信息                    | 查询主题配置，供前端展示                |
+| 特性      | room\_generation | room\_regen                     | list\_themes                    | road\_generation |
+| ------- | ---------------- | ------------------------------- | ------------------------------- | ---------------- |
+| **输入**  | 参数设置             | 参数设置 + PNG文件上传                  | 仅需hip和uuid                    | user_id + request_time + cook_node数组 |
+| **处理**  | hython cook节点    | PNG→JSON转换 + hython pressButton | 读取配置文件，解析主题信息            | 读取用户日志回溯uuid + 顺序执行多个cook节点 |
+| **输出**  | JSON + PNG文件     | 仅执行结果（无文件输出）                    | 主题配置信息（JSON格式）              | 仅执行结果（无文件输出） |
+| **文件流** | 无 → JSON → PNG   | PNG → JSON → 无                  | 无文件生成，仅信息查询                | 无文件生成，仅状态返回 |
+| **用途**  | 生成初始房间布局         | 基于现有布局更新房间信息                    | 查询主题配置，供前端展示                | 生成道路/连通性关系 |
 
 ### 房间生成任务完整流程
 
@@ -371,6 +379,31 @@ sequenceDiagram
     Processor->>Processor: 解析主题信息，格式化输出
     Processor-->>Dispatcher: 返回主题配置信息
     Dispatcher-->>Client: HTTP响应（包含themes/lines/text）
+```
+
+### 道路关系生成任务完整流程（step5）
+
+```mermaid
+sequenceDiagram
+    participant Client as 🟦前端画板
+    participant Dispatcher as 🟩调度服务
+    participant Processor as 🟩道路关系生成处理器
+    participant LogSystem as 🟥统一日志系统
+    participant Hython as 🟨hython工作脚本
+    participant Houdini as 🟨Houdini引擎
+
+    Client->>Dispatcher: POST /cook (road_generation)<br/>+ user_id + request_time
+    Dispatcher->>Processor: 获取处理器实例
+    Processor->>Processor: 验证请求参数（cook_node数组, step_back_count）
+    Processor->>LogSystem: 从用户日志回溯获取缓存uuid
+    Processor->>Hython: 依次对每个cook_node执行
+    Hython->>Houdini: 加载HIP并执行节点
+    Houdini-->>Hython: 返回执行结果
+    Hython-->>Processor: 汇总执行状态
+    Processor->>LogSystem: 写入详细日志<br/>detail/{uuid}.json
+    Processor-->>Dispatcher: 返回执行结果
+    Dispatcher->>LogSystem: 成功时写入用户栈日志<br/>users/{user_id}.json
+    Dispatcher-->>Client: HTTP响应
 ```
 
 ### 任务执行状态流转
@@ -525,6 +558,7 @@ class NewTaskProcessor(BaseTaskProcessor):
 *   `RoomGenerationProcessor`：房间生成（hython + JSON→PNG）
 *   `RoomRegenProcessor`：房间信息更新（PNG→JSON + hython pressButton）
 *   `ListThemesProcessor`：主题配置查询（读取配置文件，返回主题信息）
+*   `RoadGenerationProcessor`: 房间连通道路生成（hython多节点任务 + hython pressButton + 数据转换）
 
 **步骤2**：注册到处理器注册表
 
@@ -568,10 +602,14 @@ classDiagram
     class ListThemesProcessor {
         +execute(payload: dict): dict
     }
+    class RoadGenerationProcessor {
+        +execute(payload: dict): dict
+    }
     
     BaseTaskProcessor <|-- RoomGenerationProcessor
     BaseTaskProcessor <|-- RoomRegenProcessor
     BaseTaskProcessor <|-- ListThemesProcessor
+    BaseTaskProcessor <|-- RoadGenerationProcessor
 ```
 
 ## 部署与配置

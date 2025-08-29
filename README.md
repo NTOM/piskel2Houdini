@@ -86,10 +86,37 @@ Piskel2Houdini 是一个基于 [Piskel](https://github.com/piskelapp/piskel) 开
   - **配置灵活**：不同任务类型可以有不同的必需字段和参数
   - **向后兼容**：现有功能包装为默认处理器
 
+#### 3.1.1 统一日志系统架构
+- **设计理念**：采用OOP设计，统一管理两类日志的写入
+- **核心组件**：
+  - `LogSystem`：统一日志系统类，提供detail与users日志写入接口
+  - **详细日志**：按任务uuid记录完整执行信息
+  - **用户宏观日志**：按用户会话记录操作栈与历史
+- **特性**：
+  - 原子写入：使用临时文件+重命名确保数据完整性
+  - 自动目录创建：按需创建日志目录结构
+  - 栈式管理：支持相同process_name的覆写逻辑
+  - 历史迁移：被覆盖的操作自动移入history
+
+#### 3.1.2 数据格式转换与文件输出
+- **JSON → PNG 转换**：
+  - 脚本：`houdini/json2jpg.py`（名称保留，实际输出 PNG）
+  - 功能：读取生成的 `<hip_dir>/export/serve/{uuid}.json`，转换为 `<hip_dir>/export/serve/{uuid>.png`
+  - 像素处理：支持 `pixels` 为列表或映射对象格式，RGB 分量范围 [0,1] → [0,255]
+  - 输出格式：PNG（无损，像素完美保真）
+  - 集成方式：由 `RoomGenerationProcessor` 在 hython 成功后同步执行
+- **文件输出结构**：
+  - JSON 数据：`<hip>/export/serve/{uuid}.json`
+  - PNG 图片：`<hip>/export/serve/{uuid>.png`
+  - 日志记录：
+    - 详细日志：`<hip>/export/serve/log/detail/{uuid}.json`
+    - 用户宏观日志：`<hip>/export/serve/log/users/{users}_{YYYYMMDDHHmm}.json`
+
 - **目前支持的任务类型**
     - **room_generation**（默认）：房间生成，执行 hython + JSON转PNG 流程
-    - **RoomRegen**：房间连接关系重新生成
-    - **ListThemes**：主题配置查询（读取配置文件，返回主题信息）
+    - **room_regen**：房间连接关系重新生成
+    - **list_themes**：主题配置查询（读取配置文件，返回主题信息）
+    - **road_generation（step5）**：道路关系生成（基于缓存UUID按序执行多节点）
 
 #### 3.2 流程
 1. 前端/调用方向调度服务发送 `POST /cook`，指定 `task_type`
@@ -167,6 +194,34 @@ Piskel2Houdini 是一个基于 [Piskel](https://github.com/piskelapp/piskel) 开
   "stderr": "..."
 }
 ```
+
+#### 3.3.1 step5：道路关系生成（road_generation）
+
+- 用途：基于最近一次或第N次成功操作的缓存 `uuid`，顺序执行多个 `cook_node`，生成连通/道路关系。
+- 请求要点：
+  - `task_type`: `road_generation`
+  - `cook_node`: 数组，顺序执行
+  - `parms.step_back_count`: 整数（>=1），从用户日志回溯第N次成功的 `uuid`
+  - 顶层需包含 `user_id`、`request_time`
+- 示例：
+```json
+{
+  "task_type": "road_generation",
+  "hip": "I:/Ugit_Proj/moco_pcg/dev_oa_ui.hip",
+  "cook_node": [
+    "/obj/UI_part_01/cook_road_001",
+    "/obj/UI_part_01/cook_road_002"
+  ],
+  "parm_node": "/obj/UI_part_01/SETTING",
+  "uuid": "<前端生成的uuid>",
+  "parms": { "step_back_count": 1 },
+  "hython": "C:/Program Files/Side Effects Software/Houdini 20.5.487/bin/hython.exe",
+  "timeout_sec": 600,
+  "user_id": "dallas_202508221713",
+  "request_time": "2025-08-22T17:16:00+08:00"
+}
+```
+- 响应：结构与 `room_regen` 类似，无新增文件输出字段。
 
 #### 3.4 统一日志系统与跨域（CORS）
 - **统一日志系统**：采用OOP设计，支持两类日志
@@ -328,58 +383,7 @@ Invoke-RestMethod -Uri "http://127.0.0.1:5050/cook" `
 *   [x] 地牢布局生成算法
 *   [ ] 任务池功能
 
-### 新增功能说明
-
-#### 统一日志系统架构
-- **设计理念**：采用OOP设计，统一管理两类日志的写入
-- **核心组件**：
-  - `LogSystem`：统一日志系统类，提供detail与users日志写入接口
-  - **详细日志**：按任务uuid记录完整执行信息
-  - **用户宏观日志**：按用户会话记录操作栈与历史
-- **特性**：
-  - 原子写入：使用临时文件+重命名确保数据完整性
-  - 自动目录创建：按需创建日志目录结构
-  - 栈式管理：支持相同process_name的覆写逻辑
-  - 历史迁移：被覆盖的操作自动移入history
-
-#### 插件化任务处理器架构
-- **设计理念**：每种任务类型对应一个处理器类，处理器负责自己的执行流程
-- **核心组件**：
-  - `BaseTaskProcessor`：抽象基类，定义处理器接口
-  - `RoomGenerationProcessor`：房间生成处理器（hython + JSON转PNG）
-  - `RoomRegenProcessor`：房间信息更新处理器（PNG→JSON + hython pressButton）
-  - `TextureExportProcessor`：纹理导出处理器（待实现）
-  - `LightingBakeProcessor`：光照烘焙处理器（待实现）
-- **优势**：
-  - 可扩展性：新增功能只需实现新的处理器类
-  - 职责分离：每种任务类型独立维护
-  - 配置灵活：不同任务类型可以有不同的必需字段和参数
-  - 向后兼容：现有功能包装为默认处理器
-
-#### JSON → PNG 转换
-- **脚本**：`houdini/json2jpg.py`（名称保留，实际输出 PNG）
-- **功能**：读取生成的 `<hip_dir>/export/serve/{uuid}.json`，转换为 `<hip_dir>/export/serve/{uuid}.png`
-- **像素处理**：
-  - 支持 `pixels` 为列表或映射对象格式
-  - RGB 分量范围 [0,1] → [0,255]
-  - 像素索引：左下角原点，先 X 后 Y 递增
-  - 画布尺寸：根据 `total_prims` 推断正方形（要求完全平方数）
-- **输出格式**：PNG（无损，像素完美保真）
-- **集成方式**：由 `RoomGenerationProcessor` 在 hython 成功后同步执行
-
-#### 响应结构更新
-- 新增 `post` 字段，包含 json2jpg 执行结果
-- `post.json` 包含：`path_json`、`path_png`、`width`、`height`、`pixels_written` 等
-- 支持 `post_timeout_sec` 和 `post_wait_sec` 参数控制后置处理超时和等待时间
-
-#### 文件输出
-- **JSON 数据**：`<hip>/export/serve/{uuid}.json`
-- **PNG 图片**：`<hip>/export/serve/{uuid}.png`
-- **日志记录**：
-  - 详细日志：`<hip>/export/serve/log/detail/{uuid}.json`
-  - 用户宏观日志：`<hip>/export/serve/log/users/{users}_{YYYYMMDDHHmm}.json`
-
-#### 新增API接口
+### 新增API接口
 - **`GET /tasks`**：列出支持的任务类型和默认任务类型
 - **向后兼容**：不指定 `task_type` 时默认使用 `room_generation`
 
